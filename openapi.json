@@ -1,0 +1,2426 @@
+{
+	"info": {
+		"title": "Cart & Rewards API",
+		"description": "Carts, idempotent checkout, orders, and a coupon made available after every n-th placed order.\n\n## Conventions\n\n- **Money** is always a decimal string with two digits, such as `\"19.99\"`, never a JSON number.\n- **Errors** always have one shape: `{ \"status\": \"error\", \"code\": \"...\", \"message\": \"...\", \"details\": {...}? }`.\n  Branch on `code`, not on `message`. All codes are listed below.\n- **Administrative operations** live under `/api/admin`. Authentication is not implemented.\n\n## A typical purchase\n\n1. `GET /api/products`, then `POST /api/carts`.\n2. `POST /api/carts/{id}/items` for each product (repeat adds increase the quantity).\n3. `POST /api/carts/{id}/checkout`. A cart is single-use: create a new one for the next purchase.\n4. `GET /api/orders/{id}` returns the order exactly as placed.\n\n## Retrying checkout\n\nThe cart is the idempotency key. If a checkout request times out or its response is lost, send the same\nrequest again: the original order is returned with `200` and header `Idempotent-Replayed: true`, and no second\norder or stock deduction happens. A failed checkout (stock, price, coupon or payment) changes nothing.\n\n## Prices and stock\n\nAdding to a cart does not reserve stock. Checkout is the authority: it re-checks stock and prices in one\ntransaction. If a price changed since the item was added, checkout returns `409 PRICE_CHANGED` with the old and\nnew prices; retry with `acceptPriceChanges: true` to be charged the current prices.\n\n## Coupons\n\nEvery n-th successfully placed order reaches a milestone (n is configured). An administrator calls\n`POST /api/admin/coupons/generate` to create the coupon for the lowest unrewarded milestone. A coupon takes a\npercentage off the whole order subtotal (rounded half up, never below zero), is single-use, and is consumed only\nif the checkout succeeds.\n\n## Error codes\n\n| Code | HTTP | Meaning | What to do |\n|---|---|---|---|\n| `VALIDATION_ERROR` | 400 | A field is missing, malformed or out of range. `details.errors` lists each field. | Fix the request. Retrying unchanged will fail again. |\n| `INVALID_BODY` | 400 | The request body is not valid JSON. | Send well-formed JSON. |\n| `PAYMENT_DECLINED` | 402 | The payment was declined. Nothing was changed: stock and coupon are untouched. | Retry with another payment method; the cart is still open. |\n| `PRODUCT_NOT_FOUND` | 404 | The product does not exist. | Use an id from `GET /api/products`. |\n| `CART_NOT_FOUND` | 404 | The cart does not exist. | Create one with `POST /api/carts`. |\n| `ITEM_NOT_IN_CART` | 404 | That product is not in the cart. | Add it first, or refresh the cart view. |\n| `ORDER_NOT_FOUND` | 404 | The order does not exist. | Check the order id returned by checkout. |\n| `ROUTE_NOT_FOUND` | 404 | No such endpoint. | Check the path and method. |\n| `INSUFFICIENT_STOCK` | 409 | Not enough stock. `details.lines` lists each short product with `requested` and `available`. Nothing was changed. | Lower the quantities or remove the items, then retry. |\n| `PRICE_CHANGED` | 409 | A price changed since the item was added. `details.lines` lists `oldUnitPrice` and `newUnitPrice`. Nothing was changed. | Show the new prices; to accept them, retry checkout with `acceptPriceChanges: true`. |\n| `CART_NOT_OPEN` | 409 | The cart was already checked out and can no longer be changed. | Create a new cart for the next purchase. |\n| `CART_ALREADY_CHECKED_OUT` | 409 | The cart was checked out with a different coupon than this request. `details.orderId` is the original order. | Fetch the original order; do not retry with a different body. |\n| `COUPON_ALREADY_REDEEMED` | 409 | The coupon has already been used. Nothing was changed. | Retry without the coupon, or with a different one. |\n| `NO_ELIGIBLE_MILESTONE` | 409 | No unrewarded order milestone has been reached. `details` shows orders placed and orders until the next milestone. | Try again after more orders are placed. |\n| `CART_EMPTY` | 422 | The cart has no items. | Add at least one item before checkout. |\n| `COUPON_NOT_FOUND` | 422 | The coupon code does not exist. Nothing was changed. | Check the code, or retry without a coupon. |\n| `INTERNAL_ERROR` | 500 | Unexpected server error. Details are logged, not returned. | Retry; checkout is safe to retry. |\n| `SERVICE_UNAVAILABLE` | 503 | The database is temporarily unreachable. | Retry shortly; checkout is safe to retry. |",
+		"version": "1.0.0"
+	},
+	"tags": [
+		{
+			"name": "System",
+			"description": "Service health"
+		},
+		{
+			"name": "Products",
+			"description": "Product catalog"
+		},
+		{
+			"name": "Carts",
+			"description": "Cart lifecycle and checkout"
+		},
+		{
+			"name": "Orders",
+			"description": "Placed orders"
+		},
+		{
+			"name": "Admin",
+			"description": "Administrative operations (no auth implemented)"
+		}
+	],
+	"openapi": "3.1.2",
+	"paths": {
+		"/health": {
+			"get": {
+				"tags": ["System"],
+				"summary": "Health check",
+				"description": "Returns 200 when the service can reach its database, 503 otherwise.",
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["status", "timestamp"],
+									"properties": {
+										"status": {
+											"const": "ok",
+											"type": "string"
+										},
+										"timestamp": {
+											"format": "date-time",
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"503": {
+						"description": "Response for status 503",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getHealth"
+			}
+		},
+		"/api/products": {
+			"get": {
+				"tags": ["Products"],
+				"summary": "List products",
+				"description": "Returns every product with its current price and available stock.",
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"title": "Product",
+										"type": "object",
+										"required": ["id", "name", "price", "stock"],
+										"properties": {
+											"id": {
+												"format": "uuid",
+												"description": "UUID",
+												"examples": ["11111111-1111-4111-8111-111111111111"],
+												"type": "string"
+											},
+											"name": {
+												"type": "string"
+											},
+											"price": {
+												"pattern": "^\\d+\\.\\d{2}$",
+												"description": "Decimal amount with 2 fraction digits",
+												"examples": ["19.99"],
+												"type": "string"
+											},
+											"stock": {
+												"description": "Units currently available (not a reservation)",
+												"anyOf": [
+													{
+														"format": "integer",
+														"default": 0,
+														"type": "string"
+													},
+													{
+														"description": "Units currently available (not a reservation)",
+														"type": "integer"
+													}
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiProducts"
+			}
+		},
+		"/api/products/{id}": {
+			"get": {
+				"tags": ["Products"],
+				"summary": "Get a product",
+				"description": "Errors: `404 PRODUCT_NOT_FOUND`, `400 VALIDATION_ERROR` (id is not a UUID).",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Product",
+									"type": "object",
+									"required": ["id", "name", "price", "stock"],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"name": {
+											"type": "string"
+										},
+										"price": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"stock": {
+											"description": "Units currently available (not a reservation)",
+											"anyOf": [
+												{
+													"format": "integer",
+													"default": 0,
+													"type": "string"
+												},
+												{
+													"description": "Units currently available (not a reservation)",
+													"type": "integer"
+												}
+											]
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiProductsById"
+			}
+		},
+		"/api/carts": {
+			"post": {
+				"tags": ["Carts"],
+				"summary": "Create a cart",
+				"description": "Creates an empty cart. A cart is single-use: once checked out it cannot be reused, create a new cart for the next purchase. The cart id acts as the client's handle.",
+				"responses": {
+					"201": {
+						"description": "Response for status 201",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Cart",
+									"type": "object",
+									"required": ["id", "status", "items", "totalQuantity", "subtotal"],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"status": {
+											"type": "string",
+											"enum": ["OPEN", "CHECKED_OUT"]
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "CartLine",
+												"type": "object",
+												"required": [
+													"productId",
+													"name",
+													"quantity",
+													"unitPrice",
+													"unitPriceAtAdd",
+													"priceChanged",
+													"lineTotal"
+												],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Current catalog price (what checkout would charge)",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"unitPriceAtAdd": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Price recorded when the line was added",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"priceChanged": {
+														"description": "True when unitPrice differs from unitPriceAtAdd",
+														"type": "boolean"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"totalQuantity": {
+											"type": "integer"
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Sum of line totals at current prices, before any coupon",
+											"examples": ["19.99"],
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "postApiCarts"
+			}
+		},
+		"/api/carts/{id}": {
+			"get": {
+				"tags": ["Carts"],
+				"summary": "View a cart",
+				"description": "Returns lines with current prices, a `priceChanged` flag per line, quantity and subtotal. Read-only. Errors: `404 CART_NOT_FOUND`.",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Cart",
+									"type": "object",
+									"required": ["id", "status", "items", "totalQuantity", "subtotal"],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"status": {
+											"type": "string",
+											"enum": ["OPEN", "CHECKED_OUT"]
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "CartLine",
+												"type": "object",
+												"required": [
+													"productId",
+													"name",
+													"quantity",
+													"unitPrice",
+													"unitPriceAtAdd",
+													"priceChanged",
+													"lineTotal"
+												],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Current catalog price (what checkout would charge)",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"unitPriceAtAdd": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Price recorded when the line was added",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"priceChanged": {
+														"description": "True when unitPrice differs from unitPriceAtAdd",
+														"type": "boolean"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"totalQuantity": {
+											"type": "integer"
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Sum of line totals at current prices, before any coupon",
+											"examples": ["19.99"],
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiCartsById"
+			}
+		},
+		"/api/carts/{id}/items": {
+			"post": {
+				"tags": ["Carts"],
+				"summary": "Add an item",
+				"description": "Adds `quantity` units. Adding a product already in the cart increases its quantity. Errors: `404 CART_NOT_FOUND` / `PRODUCT_NOT_FOUND`, `409 INSUFFICIENT_STOCK` (resulting quantity exceeds stock), `409 CART_NOT_OPEN`, `400 VALIDATION_ERROR` (quantity not an integer 1-99, or the line would exceed 99).",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["productId", "quantity"],
+								"properties": {
+									"productId": {
+										"format": "uuid",
+										"description": "UUID",
+										"examples": ["11111111-1111-4111-8111-111111111111"],
+										"type": "string"
+									},
+									"quantity": {
+										"minimum": 1,
+										"maximum": 99,
+										"description": "Whole units, 1 to 99",
+										"type": "integer"
+									}
+								}
+							}
+						},
+						"application/x-www-form-urlencoded": {
+							"schema": {
+								"type": "object",
+								"required": ["productId", "quantity"],
+								"properties": {
+									"productId": {
+										"format": "uuid",
+										"description": "UUID",
+										"examples": ["11111111-1111-4111-8111-111111111111"],
+										"type": "string"
+									},
+									"quantity": {
+										"minimum": 1,
+										"maximum": 99,
+										"description": "Whole units, 1 to 99",
+										"type": "integer"
+									}
+								}
+							}
+						},
+						"multipart/form-data": {
+							"schema": {
+								"type": "object",
+								"required": ["productId", "quantity"],
+								"properties": {
+									"productId": {
+										"format": "uuid",
+										"description": "UUID",
+										"examples": ["11111111-1111-4111-8111-111111111111"],
+										"type": "string"
+									},
+									"quantity": {
+										"minimum": 1,
+										"maximum": 99,
+										"description": "Whole units, 1 to 99",
+										"type": "integer"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Cart",
+									"type": "object",
+									"required": ["id", "status", "items", "totalQuantity", "subtotal"],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"status": {
+											"type": "string",
+											"enum": ["OPEN", "CHECKED_OUT"]
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "CartLine",
+												"type": "object",
+												"required": [
+													"productId",
+													"name",
+													"quantity",
+													"unitPrice",
+													"unitPriceAtAdd",
+													"priceChanged",
+													"lineTotal"
+												],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Current catalog price (what checkout would charge)",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"unitPriceAtAdd": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Price recorded when the line was added",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"priceChanged": {
+														"description": "True when unitPrice differs from unitPriceAtAdd",
+														"type": "boolean"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"totalQuantity": {
+											"type": "integer"
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Sum of line totals at current prices, before any coupon",
+											"examples": ["19.99"],
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Response for status 409",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "postApiCartsByIdItems"
+			}
+		},
+		"/api/carts/{id}/items/{productId}": {
+			"patch": {
+				"tags": ["Carts"],
+				"summary": "Set an item's quantity",
+				"description": "Sets an absolute quantity, so it is safe to retry. Errors: `404 CART_NOT_FOUND` / `ITEM_NOT_IN_CART`, `409 INSUFFICIENT_STOCK`, `409 CART_NOT_OPEN`, `400 VALIDATION_ERROR`.",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					},
+					{
+						"name": "productId",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["quantity"],
+								"properties": {
+									"quantity": {
+										"minimum": 1,
+										"maximum": 99,
+										"description": "Whole units, 1 to 99",
+										"type": "integer"
+									}
+								}
+							}
+						},
+						"application/x-www-form-urlencoded": {
+							"schema": {
+								"type": "object",
+								"required": ["quantity"],
+								"properties": {
+									"quantity": {
+										"minimum": 1,
+										"maximum": 99,
+										"description": "Whole units, 1 to 99",
+										"type": "integer"
+									}
+								}
+							}
+						},
+						"multipart/form-data": {
+							"schema": {
+								"type": "object",
+								"required": ["quantity"],
+								"properties": {
+									"quantity": {
+										"minimum": 1,
+										"maximum": 99,
+										"description": "Whole units, 1 to 99",
+										"type": "integer"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Cart",
+									"type": "object",
+									"required": ["id", "status", "items", "totalQuantity", "subtotal"],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"status": {
+											"type": "string",
+											"enum": ["OPEN", "CHECKED_OUT"]
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "CartLine",
+												"type": "object",
+												"required": [
+													"productId",
+													"name",
+													"quantity",
+													"unitPrice",
+													"unitPriceAtAdd",
+													"priceChanged",
+													"lineTotal"
+												],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Current catalog price (what checkout would charge)",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"unitPriceAtAdd": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Price recorded when the line was added",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"priceChanged": {
+														"description": "True when unitPrice differs from unitPriceAtAdd",
+														"type": "boolean"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"totalQuantity": {
+											"type": "integer"
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Sum of line totals at current prices, before any coupon",
+											"examples": ["19.99"],
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Response for status 409",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "patchApiCartsByIdItemsByProductId"
+			},
+			"delete": {
+				"tags": ["Carts"],
+				"summary": "Remove an item",
+				"description": "Removes the line. Re-adding the product records the current price. Errors: `404 CART_NOT_FOUND` / `ITEM_NOT_IN_CART`, `409 CART_NOT_OPEN`.",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					},
+					{
+						"name": "productId",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Cart",
+									"type": "object",
+									"required": ["id", "status", "items", "totalQuantity", "subtotal"],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"status": {
+											"type": "string",
+											"enum": ["OPEN", "CHECKED_OUT"]
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "CartLine",
+												"type": "object",
+												"required": [
+													"productId",
+													"name",
+													"quantity",
+													"unitPrice",
+													"unitPriceAtAdd",
+													"priceChanged",
+													"lineTotal"
+												],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Current catalog price (what checkout would charge)",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"unitPriceAtAdd": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Price recorded when the line was added",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"priceChanged": {
+														"description": "True when unitPrice differs from unitPriceAtAdd",
+														"type": "boolean"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"totalQuantity": {
+											"type": "integer"
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Sum of line totals at current prices, before any coupon",
+											"examples": ["19.99"],
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Response for status 409",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "deleteApiCartsByIdItemsByProductId"
+			}
+		},
+		"/api/carts/{id}/checkout": {
+			"post": {
+				"tags": ["Carts"],
+				"summary": "Check out a cart",
+				"description": "Validates the cart and places the order in one transaction: re-checks prices and stock, takes the stock, charges payment, stores the order and closes the cart.\n\n**Safe to retry.** The cart is the idempotency key: a repeated request for a cart that was already checked out returns the original order with `200` and header `Idempotent-Replayed: true`. No second order and no second stock deduction.\n\nAn optional `couponCode` takes its percentage off the whole subtotal (rounded half up, never below zero). A coupon is single-use and is only consumed if the checkout succeeds. Retrying with the same body replays; retrying a checked-out cart with a different coupon returns `409 CART_ALREADY_CHECKED_OUT`.\n\nSuccess: `201` with the new order. Errors: `404 CART_NOT_FOUND`, `422 CART_EMPTY`, `422 COUPON_NOT_FOUND`, `409 COUPON_ALREADY_REDEEMED`, `409 PRICE_CHANGED` (details list old/new price per line; retry with `acceptPriceChanges: true`), `409 INSUFFICIENT_STOCK` (details list every short line), `402 PAYMENT_DECLINED`. A failed checkout changes nothing: stock and the cart are untouched.",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"couponCode": {
+										"minLength": 1,
+										"maxLength": 64,
+										"description": "Single-use coupon code (case-insensitive). Invalid codes fail the whole checkout.",
+										"examples": ["SAVE10-K7Q2XM4P"],
+										"type": "string"
+									},
+									"acceptPriceChanges": {
+										"description": "Set true to be charged current prices when they differ from the prices recorded when items were added",
+										"type": "boolean"
+									}
+								}
+							}
+						},
+						"application/x-www-form-urlencoded": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"couponCode": {
+										"minLength": 1,
+										"maxLength": 64,
+										"description": "Single-use coupon code (case-insensitive). Invalid codes fail the whole checkout.",
+										"examples": ["SAVE10-K7Q2XM4P"],
+										"type": "string"
+									},
+									"acceptPriceChanges": {
+										"description": "Set true to be charged current prices when they differ from the prices recorded when items were added",
+										"type": "boolean"
+									}
+								}
+							}
+						},
+						"multipart/form-data": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"couponCode": {
+										"minLength": 1,
+										"maxLength": 64,
+										"description": "Single-use coupon code (case-insensitive). Invalid codes fail the whole checkout.",
+										"examples": ["SAVE10-K7Q2XM4P"],
+										"type": "string"
+									},
+									"acceptPriceChanges": {
+										"description": "Set true to be charged current prices when they differ from the prices recorded when items were added",
+										"type": "boolean"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Order",
+									"type": "object",
+									"required": [
+										"id",
+										"orderNumber",
+										"cartId",
+										"items",
+										"subtotal",
+										"discount",
+										"total",
+										"coupon",
+										"placedAt"
+									],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"orderNumber": {
+											"description": "Display number. May have gaps; not used for milestones.",
+											"type": "integer"
+										},
+										"cartId": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "OrderItem",
+												"type": "object",
+												"required": ["productId", "name", "quantity", "unitPrice", "lineTotal"],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"description": "Product name at the time of purchase",
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Unit price charged",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"discount": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"total": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "subtotal - discount",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"coupon": {
+											"type": ["object", "null"],
+											"required": ["code", "discountPercent"],
+											"properties": {
+												"code": {
+													"type": "string"
+												},
+												"discountPercent": {
+													"type": "integer"
+												}
+											}
+										},
+										"placedAt": {
+											"format": "date-time",
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"201": {
+						"description": "Response for status 201",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Order",
+									"type": "object",
+									"required": [
+										"id",
+										"orderNumber",
+										"cartId",
+										"items",
+										"subtotal",
+										"discount",
+										"total",
+										"coupon",
+										"placedAt"
+									],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"orderNumber": {
+											"description": "Display number. May have gaps; not used for milestones.",
+											"type": "integer"
+										},
+										"cartId": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "OrderItem",
+												"type": "object",
+												"required": ["productId", "name", "quantity", "unitPrice", "lineTotal"],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"description": "Product name at the time of purchase",
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Unit price charged",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"discount": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"total": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "subtotal - discount",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"coupon": {
+											"type": ["object", "null"],
+											"required": ["code", "discountPercent"],
+											"properties": {
+												"code": {
+													"type": "string"
+												},
+												"discountPercent": {
+													"type": "integer"
+												}
+											}
+										},
+										"placedAt": {
+											"format": "date-time",
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"402": {
+						"description": "Response for status 402",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Response for status 409",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"422": {
+						"description": "Response for status 422",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "postApiCartsByIdCheckout"
+			}
+		},
+		"/api/orders/{id}": {
+			"get": {
+				"tags": ["Orders"],
+				"summary": "Get an order",
+				"description": "Returns the order exactly as placed: item names, unit prices, quantities, subtotal, discount and total. Later product edits never change it. Errors: `404 ORDER_NOT_FOUND`.",
+				"parameters": [
+					{
+						"name": "id",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"format": "uuid",
+							"description": "UUID",
+							"examples": ["11111111-1111-4111-8111-111111111111"],
+							"type": "string"
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Order",
+									"type": "object",
+									"required": [
+										"id",
+										"orderNumber",
+										"cartId",
+										"items",
+										"subtotal",
+										"discount",
+										"total",
+										"coupon",
+										"placedAt"
+									],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"orderNumber": {
+											"description": "Display number. May have gaps; not used for milestones.",
+											"type": "integer"
+										},
+										"cartId": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"items": {
+											"type": "array",
+											"items": {
+												"title": "OrderItem",
+												"type": "object",
+												"required": ["productId", "name", "quantity", "unitPrice", "lineTotal"],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"description": "Product name at the time of purchase",
+														"type": "string"
+													},
+													"quantity": {
+														"type": "integer"
+													},
+													"unitPrice": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Unit price charged",
+														"examples": ["19.99"],
+														"type": "string"
+													},
+													"lineTotal": {
+														"pattern": "^\\d+\\.\\d{2}$",
+														"description": "Decimal amount with 2 fraction digits",
+														"examples": ["19.99"],
+														"type": "string"
+													}
+												}
+											}
+										},
+										"subtotal": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"discount": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "Decimal amount with 2 fraction digits",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"total": {
+											"pattern": "^\\d+\\.\\d{2}$",
+											"description": "subtotal - discount",
+											"examples": ["19.99"],
+											"type": "string"
+										},
+										"coupon": {
+											"type": ["object", "null"],
+											"required": ["code", "discountPercent"],
+											"properties": {
+												"code": {
+													"type": "string"
+												},
+												"discountPercent": {
+													"type": "integer"
+												}
+											}
+										},
+										"placedAt": {
+											"format": "date-time",
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"404": {
+						"description": "Response for status 404",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiOrdersById"
+			}
+		},
+		"/api/admin/coupons/generate": {
+			"post": {
+				"tags": ["Admin"],
+				"summary": "Generate a coupon for an unrewarded milestone",
+				"description": "Every n-th successfully placed order reaches a milestone. This creates one coupon for the lowest milestone that has been reached and not yet rewarded. Call it again for the next one. Safe under concurrency: simultaneous calls never create two coupons for one milestone.\\n\\nErrors: `409 NO_ELIGIBLE_MILESTONE` (details show orders placed and orders until the next milestone).",
+				"responses": {
+					"201": {
+						"description": "Response for status 201",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Coupon",
+									"type": "object",
+									"required": [
+										"id",
+										"code",
+										"milestone",
+										"discountPercent",
+										"status",
+										"generatedAt",
+										"redeemedAt",
+										"redeemedOrderId"
+									],
+									"properties": {
+										"id": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": "string"
+										},
+										"code": {
+											"examples": ["SAVE10-K7Q2XM4P"],
+											"type": "string"
+										},
+										"milestone": {
+											"description": "Order milestone this coupon rewards (1 = first n orders)",
+											"type": "integer"
+										},
+										"discountPercent": {
+											"description": "Percentage taken off the order subtotal",
+											"type": "integer"
+										},
+										"status": {
+											"type": "string",
+											"enum": ["AVAILABLE", "REDEEMED"]
+										},
+										"generatedAt": {
+											"format": "date-time",
+											"type": "string"
+										},
+										"redeemedAt": {
+											"format": "date-time",
+											"type": ["string", "null"]
+										},
+										"redeemedOrderId": {
+											"format": "uuid",
+											"description": "UUID",
+											"examples": ["11111111-1111-4111-8111-111111111111"],
+											"type": ["string", "null"]
+										}
+									}
+								}
+							}
+						}
+					},
+					"409": {
+						"description": "Response for status 409",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "postApiAdminCouponsGenerate"
+			}
+		},
+		"/api/admin/coupons": {
+			"get": {
+				"tags": ["Admin"],
+				"summary": "List coupons",
+				"description": "All generated coupons ordered by milestone, optionally filtered by `status`.",
+				"parameters": [
+					{
+						"name": "status",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"type": "string",
+							"enum": ["AVAILABLE", "REDEEMED"]
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"title": "Coupon",
+										"type": "object",
+										"required": [
+											"id",
+											"code",
+											"milestone",
+											"discountPercent",
+											"status",
+											"generatedAt",
+											"redeemedAt",
+											"redeemedOrderId"
+										],
+										"properties": {
+											"id": {
+												"format": "uuid",
+												"description": "UUID",
+												"examples": ["11111111-1111-4111-8111-111111111111"],
+												"type": "string"
+											},
+											"code": {
+												"examples": ["SAVE10-K7Q2XM4P"],
+												"type": "string"
+											},
+											"milestone": {
+												"description": "Order milestone this coupon rewards (1 = first n orders)",
+												"type": "integer"
+											},
+											"discountPercent": {
+												"description": "Percentage taken off the order subtotal",
+												"type": "integer"
+											},
+											"status": {
+												"type": "string",
+												"enum": ["AVAILABLE", "REDEEMED"]
+											},
+											"generatedAt": {
+												"format": "date-time",
+												"type": "string"
+											},
+											"redeemedAt": {
+												"format": "date-time",
+												"type": ["string", "null"]
+											},
+											"redeemedOrderId": {
+												"format": "uuid",
+												"description": "UUID",
+												"examples": ["11111111-1111-4111-8111-111111111111"],
+												"type": ["string", "null"]
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					"400": {
+						"description": "Response for status 400",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "ErrorResponse",
+									"type": "object",
+									"required": ["status", "code", "message"],
+									"properties": {
+										"status": {
+											"const": "error",
+											"type": "string"
+										},
+										"code": {
+											"description": "Stable machine-readable error code",
+											"examples": ["CART_EMPTY"],
+											"type": "string"
+										},
+										"message": {
+											"description": "Human-readable explanation",
+											"type": "string"
+										},
+										"details": {
+											"description": "Structured context for the error",
+											"type": "object",
+											"patternProperties": {
+												"^(.*)$": {}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiAdminCoupons"
+			}
+		},
+		"/api/admin/orders": {
+			"get": {
+				"tags": ["Admin"],
+				"summary": "List all orders",
+				"description": "Every placed order, oldest first, in the same shape as `GET /orders/{id}`. Use it to verify the report: the sums of `subtotal`, `discount` and `total` here equal the report's gross, discounts and net. Not paginated.",
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"title": "Order",
+										"type": "object",
+										"required": [
+											"id",
+											"orderNumber",
+											"cartId",
+											"items",
+											"subtotal",
+											"discount",
+											"total",
+											"coupon",
+											"placedAt"
+										],
+										"properties": {
+											"id": {
+												"format": "uuid",
+												"description": "UUID",
+												"examples": ["11111111-1111-4111-8111-111111111111"],
+												"type": "string"
+											},
+											"orderNumber": {
+												"description": "Display number. May have gaps; not used for milestones.",
+												"type": "integer"
+											},
+											"cartId": {
+												"format": "uuid",
+												"description": "UUID",
+												"examples": ["11111111-1111-4111-8111-111111111111"],
+												"type": "string"
+											},
+											"items": {
+												"type": "array",
+												"items": {
+													"title": "OrderItem",
+													"type": "object",
+													"required": ["productId", "name", "quantity", "unitPrice", "lineTotal"],
+													"properties": {
+														"productId": {
+															"format": "uuid",
+															"description": "UUID",
+															"examples": ["11111111-1111-4111-8111-111111111111"],
+															"type": "string"
+														},
+														"name": {
+															"description": "Product name at the time of purchase",
+															"type": "string"
+														},
+														"quantity": {
+															"type": "integer"
+														},
+														"unitPrice": {
+															"pattern": "^\\d+\\.\\d{2}$",
+															"description": "Unit price charged",
+															"examples": ["19.99"],
+															"type": "string"
+														},
+														"lineTotal": {
+															"pattern": "^\\d+\\.\\d{2}$",
+															"description": "Decimal amount with 2 fraction digits",
+															"examples": ["19.99"],
+															"type": "string"
+														}
+													}
+												}
+											},
+											"subtotal": {
+												"pattern": "^\\d+\\.\\d{2}$",
+												"description": "Decimal amount with 2 fraction digits",
+												"examples": ["19.99"],
+												"type": "string"
+											},
+											"discount": {
+												"pattern": "^\\d+\\.\\d{2}$",
+												"description": "Decimal amount with 2 fraction digits",
+												"examples": ["19.99"],
+												"type": "string"
+											},
+											"total": {
+												"pattern": "^\\d+\\.\\d{2}$",
+												"description": "subtotal - discount",
+												"examples": ["19.99"],
+												"type": "string"
+											},
+											"coupon": {
+												"type": ["object", "null"],
+												"required": ["code", "discountPercent"],
+												"properties": {
+													"code": {
+														"type": "string"
+													},
+													"discountPercent": {
+														"type": "integer"
+													}
+												}
+											},
+											"placedAt": {
+												"format": "date-time",
+												"type": "string"
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiAdminOrders"
+			}
+		},
+		"/api/admin/report": {
+			"get": {
+				"tags": ["Admin"],
+				"summary": "Sales and rewards summary",
+				"description": "Units purchased per product, gross revenue (before discounts), total discounts, net revenue, coupons generated / available / redeemed, and total orders. Computed from one consistent snapshot, read-only, and identical for repeated calls while no orders change. Reconciles with `GET /admin/orders` and `GET /admin/coupons`.",
+				"responses": {
+					"200": {
+						"description": "Response for status 200",
+						"content": {
+							"application/json": {
+								"schema": {
+									"title": "Report",
+									"type": "object",
+									"required": ["ordersCount", "purchasedQuantityByProduct", "revenue", "coupons"],
+									"properties": {
+										"ordersCount": {
+											"description": "Successfully placed orders",
+											"type": "integer"
+										},
+										"purchasedQuantityByProduct": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"required": ["productId", "name", "quantity"],
+												"properties": {
+													"productId": {
+														"format": "uuid",
+														"description": "UUID",
+														"examples": ["11111111-1111-4111-8111-111111111111"],
+														"type": "string"
+													},
+													"name": {
+														"description": "Product name on its most recent order",
+														"type": "string"
+													},
+													"quantity": {
+														"description": "Units sold across all orders",
+														"type": "integer"
+													}
+												}
+											}
+										},
+										"revenue": {
+											"type": "object",
+											"required": ["gross", "discounts", "net"],
+											"properties": {
+												"gross": {
+													"pattern": "^\\d+\\.\\d{2}$",
+													"description": "Sum of order subtotals, before discounts",
+													"examples": ["19.99"],
+													"type": "string"
+												},
+												"discounts": {
+													"pattern": "^\\d+\\.\\d{2}$",
+													"description": "Total discounts granted",
+													"examples": ["19.99"],
+													"type": "string"
+												},
+												"net": {
+													"pattern": "^\\d+\\.\\d{2}$",
+													"description": "gross - discounts (equals the sum of order totals)",
+													"examples": ["19.99"],
+													"type": "string"
+												}
+											}
+										},
+										"coupons": {
+											"type": "object",
+											"required": ["generated", "available", "redeemed"],
+											"properties": {
+												"generated": {
+													"type": "integer"
+												},
+												"available": {
+													"description": "Generated and not yet redeemed",
+													"type": "integer"
+												},
+												"redeemed": {
+													"type": "integer"
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"operationId": "getApiAdminReport"
+			}
+		}
+	},
+	"components": {
+		"schemas": {}
+	}
+}

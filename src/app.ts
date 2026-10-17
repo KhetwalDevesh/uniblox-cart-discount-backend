@@ -1,6 +1,7 @@
 import { openapi } from "@elysiajs/openapi";
 import { Elysia, t } from "elysia";
 import type { Container } from "./container";
+import { API_DESCRIPTION } from "./docs/api-description";
 import { ServiceUnavailableError } from "./domain/errors";
 import { errorHandler } from "./lib/error-handler";
 import { log } from "./lib/logger";
@@ -9,15 +10,6 @@ import { cartRouter } from "./router/carts";
 import { orderRouter } from "./router/orders";
 import { productRouter } from "./router/products";
 import { ErrorResponse } from "./schemas/common";
-
-const API_DESCRIPTION = `
-Carts, idempotent checkout, orders and an every-nth-order coupon reward.
-
-**Errors** always use one shape: \`{ "status": "error", "code": "...", "message": "...", "details": {...}? }\`.
-Branch on \`code\`, not on \`message\`. Money amounts are decimal strings such as \`"19.99"\`.
-
-**Administrative operations** live under \`/api/admin\`. Authentication is not implemented.
-`.trim();
 
 /**
  * Builds the HTTP app from a container. Kept separate from listen() so tests can call

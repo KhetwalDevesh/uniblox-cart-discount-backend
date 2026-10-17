@@ -5,7 +5,7 @@ import type { CatalogService } from "../services/catalog.service";
 
 export const productRouter = (catalog: CatalogService) =>
 	new Elysia({ prefix: "/products", tags: ["Products"] })
-		.get("/", () => catalog.list(), {
+		.get("", () => catalog.list(), {
 			response: { 200: t.Array(ProductModel) },
 			detail: {
 				summary: "List products",

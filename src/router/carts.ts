@@ -16,7 +16,7 @@ const mutationErrors = { 400: ErrorResponse, 404: ErrorResponse, 409: ErrorRespo
 export const cartRouter = (carts: CartService, checkout: CheckoutService) =>
 	new Elysia({ prefix: "/carts", tags: ["Carts"] })
 		.post(
-			"/",
+			"",
 			async ({ set }) => {
 				set.status = 201;
 				return carts.create();

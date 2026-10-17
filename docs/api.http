@@ -1,0 +1,220 @@
+# Executable API walkthrough.
+# Works with the VS Code "REST Client" extension and the IntelliJ/WebStorm HTTP Client:
+# run the requests top to bottom (they chain through the named variables).
+#
+# Prerequisites:  bun run db:up && bun run db:migrate && bun run db:seed && bun run dev
+# Interactive docs: http://localhost:4000/swagger        Spec: openapi.json
+# Seeded product ids are fixed, so this file works on any machine.
+#   Wireless Mouse 24.99 (100)   Mechanical Keyboard 89.50 (50)   USB-C Cable 9.99 (200)
+#   Limited Edition Keycap Set 59.00 (stock 3)                    Signed Collector Poster 19.99 (stock 1)
+
+@baseUrl = http://localhost:4000/api
+@mouse = 11111111-1111-4111-8111-111111111111
+@keyboard = 22222222-2222-4222-8222-222222222222
+@cable = 33333333-3333-4333-8333-333333333333
+@keycaps = 66666666-6666-4666-8666-666666666666
+@poster = 77777777-7777-4777-8777-777777777777
+
+
+################################################################################
+# 1. Browse and build a cart
+################################################################################
+
+### List products
+GET {{baseUrl}}/products
+
+### Create a cart  ->  201, status OPEN, empty
+# @name createCart
+POST {{baseUrl}}/carts
+
+###
+@cartId = {{createCart.response.body.id}}
+
+### Add 2 mice
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{mouse}}", "quantity": 2 }
+
+### Add a keyboard (the view shows lines, live prices and the exact subtotal)
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{keyboard}}", "quantity": 1 }
+
+### Set the mouse quantity to 3 (absolute, safe to repeat)
+PATCH {{baseUrl}}/carts/{{cartId}}/items/{{mouse}}
+Content-Type: application/json
+
+{ "quantity": 3 }
+
+### Remove the keyboard
+DELETE {{baseUrl}}/carts/{{cartId}}/items/{{keyboard}}
+
+### View the cart
+GET {{baseUrl}}/carts/{{cartId}}
+
+
+################################################################################
+# 2. Invalid input is rejected and never enters the cart
+################################################################################
+
+### 400 VALIDATION_ERROR: quantity must be an integer from 1 to 99
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{mouse}}", "quantity": 0 }
+
+### 400 VALIDATION_ERROR: not a whole number
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{mouse}}", "quantity": 1.5 }
+
+### 404 PRODUCT_NOT_FOUND
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "99999999-9999-4999-8999-999999999999", "quantity": 1 }
+
+### 409 INSUFFICIENT_STOCK: only 3 keycap sets exist (details.lines shows requested vs available)
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{keycaps}}", "quantity": 4 }
+
+
+################################################################################
+# 3. Checkout, and retrying it safely
+################################################################################
+
+### Check out  ->  201 with the order (subtotal, discount, total, item snapshots)
+# @name placeOrder
+POST {{baseUrl}}/carts/{{cartId}}/checkout
+Content-Type: application/json
+
+{}
+
+###
+@orderId = {{placeOrder.response.body.id}}
+
+### RETRY the same checkout (e.g. the response was lost)
+### ->  200, header "Idempotent-Replayed: true", the SAME order, stock deducted only once
+POST {{baseUrl}}/carts/{{cartId}}/checkout
+Content-Type: application/json
+
+{}
+
+### Retrieve the order
+GET {{baseUrl}}/orders/{{orderId}}
+
+### 409 CART_NOT_OPEN: a checked-out cart cannot change
+POST {{baseUrl}}/carts/{{cartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{mouse}}", "quantity": 1 }
+
+### Stock went down by 3 for the mouse
+GET {{baseUrl}}/products/{{mouse}}
+
+### 422 CART_EMPTY: a fresh cart with nothing in it
+# @name emptyCart
+POST {{baseUrl}}/carts
+
+###
+POST {{baseUrl}}/carts/{{emptyCart.response.body.id}}/checkout
+Content-Type: application/json
+
+{}
+
+
+################################################################################
+# 4. Coupons (the demo configuration is every 3rd order -> 10% coupon, see COUPON_EVERY_N_ORDERS)
+################################################################################
+
+### Admin: generate the coupon for the next unrewarded milestone.
+### 409 NO_ELIGIBLE_MILESTONE until enough orders exist (details say how many are missing),
+### then 201 with { code, milestone, discountPercent, status: AVAILABLE }.
+# @name generateCoupon
+POST {{baseUrl}}/admin/coupons/generate
+
+###
+@couponCode = {{generateCoupon.response.body.code}}
+
+### Admin: list coupons (optionally ?status=AVAILABLE or ?status=REDEEMED)
+GET {{baseUrl}}/admin/coupons
+
+### New cart for a coupon purchase
+# @name couponCart
+POST {{baseUrl}}/carts
+
+###
+@couponCartId = {{couponCart.response.body.id}}
+
+###
+POST {{baseUrl}}/carts/{{couponCartId}}/items
+Content-Type: application/json
+
+{ "productId": "{{keyboard}}", "quantity": 2 }
+
+### Check out with the coupon  ->  201; discount = 10% of the subtotal, total never below zero
+POST {{baseUrl}}/carts/{{couponCartId}}/checkout
+Content-Type: application/json
+
+{ "couponCode": "{{couponCode}}" }
+
+### Replay with the same coupon  ->  200 + Idempotent-Replayed: true, same order
+POST {{baseUrl}}/carts/{{couponCartId}}/checkout
+Content-Type: application/json
+
+{ "couponCode": "{{couponCode}}" }
+
+### Same cart without the coupon  ->  409 CART_ALREADY_CHECKED_OUT (the original order stands)
+POST {{baseUrl}}/carts/{{couponCartId}}/checkout
+Content-Type: application/json
+
+{}
+
+### Another cart cannot reuse the coupon  ->  409 COUPON_ALREADY_REDEEMED (nothing is changed)
+# @name secondCart
+POST {{baseUrl}}/carts
+
+###
+POST {{baseUrl}}/carts/{{secondCart.response.body.id}}/items
+Content-Type: application/json
+
+{ "productId": "{{cable}}", "quantity": 1 }
+
+###
+POST {{baseUrl}}/carts/{{secondCart.response.body.id}}/checkout
+Content-Type: application/json
+
+{ "couponCode": "{{couponCode}}" }
+
+### 422 COUPON_NOT_FOUND
+POST {{baseUrl}}/carts/{{secondCart.response.body.id}}/checkout
+Content-Type: application/json
+
+{ "couponCode": "NOPE-12345678" }
+
+
+################################################################################
+# 5. Admin report (read-only, one consistent snapshot)
+################################################################################
+
+### Units per product, gross revenue, discounts, net revenue, coupons, order count
+GET {{baseUrl}}/admin/report
+
+### All orders: their subtotals, discounts and totals sum to the report's gross, discounts and net
+GET {{baseUrl}}/admin/orders
+
+
+################################################################################
+# 6. Concurrency
+################################################################################
+# These need parallel requests, which a .http file cannot send. Run:
+#
+#   bun run demo
+#
+# It races several carts for the limited-stock keycap set, retries one checkout many times at once,
+# and races carts for one coupon, then prints the outcome counts. Run `bun run db:seed` to reset stock.

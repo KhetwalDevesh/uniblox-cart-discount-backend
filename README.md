@@ -22,6 +22,31 @@ bun test                      # runs tests against the test database
 Postgres is exposed on port **5433** to avoid clashing with a local Postgres on 5432.
 Two databases are created: `cart_discount` (dev) and `cart_discount_test` (tests).
 
+## API documentation
+
+| What | Where |
+|---|---|
+| Interactive docs (Swagger UI) | http://localhost:4000/swagger |
+| OpenAPI 3 document | [openapi.json](./openapi.json) (regenerate with `bun run openapi`; a test fails if it is stale) |
+| Executable request walkthrough | [docs/api.http](./docs/api.http) (VS Code REST Client / IntelliJ HTTP Client) |
+| Concurrency demo against a running server | `bun run demo` (races carts for limited stock and for one coupon, prints outcomes) |
+| Error codes | listed in the Swagger description; source of truth is [src/docs/error-catalog.ts](./src/docs/error-catalog.ts) |
+
+Endpoints (all under `/api`; administrative ones are under `/admin`, no authentication implemented):
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/products`, `/products/{id}` | Catalog with price and available stock |
+| POST | `/carts` | Create a cart |
+| GET | `/carts/{id}` | View lines, live prices, `priceChanged`, subtotal |
+| POST | `/carts/{id}/items` | Add an item (adds to an existing line) |
+| PATCH / DELETE | `/carts/{id}/items/{productId}` | Set quantity / remove |
+| POST | `/carts/{id}/checkout` | Place the order; optional `couponCode`, `acceptPriceChanges`; safe to retry |
+| GET | `/orders/{id}` | The order exactly as placed |
+| POST | `/admin/coupons/generate` | Create the coupon for the next reached, unrewarded milestone |
+| GET | `/admin/coupons`, `/admin/orders` | List coupons (filter by status) / orders |
+| GET | `/admin/report` | Quantities per product, gross, discounts, net, coupons, order count |
+
 ## Status
 
 Built in phases; see the phase list in [plan.md](./plan.md). Sections below are completed as the phases land.
