@@ -45,7 +45,7 @@ products      id uuid pk, name, price numeric(12,2) CHECK(price>=0), stock int C
 carts         id uuid pk, status ('OPEN'|'CHECKED_OUT'), created_at, checked_out_at
 cart_items    cart_id fk, product_id fk, quantity int CHECK(quantity>0), unit_price_at_add numeric(12,2),
               added_at, PRIMARY KEY (cart_id, product_id)
-orders        id uuid pk, cart_id uuid UNIQUE fk, order_number bigint generated, currency,
+orders        id uuid pk, cart_id uuid UNIQUE fk, order_number bigint generated,
               subtotal, discount, total (all numeric(12,2)), coupon_id UNIQUE NULL fk, coupon_code NULL,
               discount_percent NULL, placed_at
               CHECK (discount >= 0 AND discount <= subtotal AND total = subtotal - discount)
@@ -61,7 +61,7 @@ Notes:
 
 ## 3. Semantics chosen for ambiguous rules (summary; full reasoning in DECISIONS.md)
 
-- **Money:** stored as `NUMERIC(12,2)` (columns named `price`, `subtotal`, `discount`, `total`, ...), exposed in the API as decimal strings such as `"19.99"`. The repository layer converts between the decimal string and integer minor units (`"19.99"` <-> `1999`); all arithmetic in services and `domain/money.ts` uses integers only, never JS floats. Currency fixed to one code. Percent discount = `round_half_up(subtotal * x / 100)` in integer math (`floor((subtotal * x + 50) / 100)`), then clamped to `[0, subtotal]`. Discount applies to the order subtotal, not per line.
+- **Money:** stored as `NUMERIC(12,2)` (columns named `price`, `subtotal`, `discount`, `total`, ...), exposed in the API as decimal strings such as `"19.99"`. The repository layer converts between the decimal string and integer minor units (`"19.99"` <-> `1999`); all arithmetic in services and `domain/money.ts` uses integers only, never JS floats. Amounts are plain numbers with no currency concept. Percent discount = `round_half_up(subtotal * x / 100)` in integer math (`floor((subtotal * x + 50) / 100)`), then clamped to `[0, subtotal]`. Discount applies to the order subtotal, not per line.
 - **Price changes after add (decided):** a cart is not a price promise; checkout is the only authority and re-validates inside its transaction.
   - `cart_items.unit_price_at_add` records the price when the line was added or last refreshed. Cart view shows live prices and `priceChanged: true` on lines whose live price differs.
   - At checkout, if any live price differs from the stored price, return `409 PRICE_CHANGED` with `details.lines[] = { productId, oldUnitPrice, newUnitPrice }`. Nothing is charged or changed.
@@ -93,10 +93,10 @@ src/
     transaction.ts              # TransactionRunner (Unit of Work): run(fn, {isolation}) -> fn(tx)
     seed.ts                     # >= 5 products, one with limited stock
   domain/
-    money.ts                    # Money helpers: parse/format decimal string <-> integer minor units, add, mul, percentOf (round half up), clamp; no floats
+    money.ts                    # Money helpers: parse/format decimal string <-> integer minor units, add, percentOf (round half up), clamp; no floats
     discount.ts                 # DiscountStrategy interface + PercentageDiscount (extensible: fixed, capped)
     errors.ts                   # AppError base + concrete subclasses (code, status, details)
-    order-pricing.ts            # pure function: lines + discount strategy -> subtotal/discount/total
+    order-pricing.ts            # calculateLineTotal, calculateSubtotal, priceOrder (lines + discount strategy -> totals), detectPriceChanges
   repositories/
     product.repository.ts
     cart.repository.ts          # lockForUpdate(cartId), item upserts

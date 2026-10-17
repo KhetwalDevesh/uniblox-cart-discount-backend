@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum CartStatus {
+  OPEN
+  CHECKED_OUT
+}
+
+enum CouponStatus {
+  AVAILABLE
+  REDEEMED
+}
+
+// Money columns are NUMERIC(12,2). Application code converts to integer minor units
+// at the repository boundary; see DECISIONS.md. CHECK constraints live in the migration SQL.
+
+model Product {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  price     Decimal  @db.Decimal(12, 2)
+  stock     Int
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  cartItems CartItem[]
+
+  @@map("products")
+}
+
+model Cart {
+  id            String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  status        CartStatus @default(OPEN)
+  createdAt     DateTime   @default(now()) @map("created_at")
+  checkedOutAt  DateTime?  @map("checked_out_at")
+
+  items CartItem[]
+  order Order?
+
+  @@map("carts")
+}
+
+model CartItem {
+  cartId         String   @map("cart_id") @db.Uuid
+  productId      String   @map("product_id") @db.Uuid
+  quantity       Int
+  unitPriceAtAdd Decimal  @map("unit_price_at_add") @db.Decimal(12, 2)
+  addedAt        DateTime @default(now()) @map("added_at")
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@id([cartId, productId])
+  @@map("cart_items")
+}
+
+model Order {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  // Display number only. Sequences skip values on rollback, so it is never used for milestones.
+  orderNumber     BigInt   @unique @default(autoincrement()) @map("order_number")
+  cartId          String   @unique @map("cart_id") @db.Uuid
+  subtotal        Decimal  @db.Decimal(12, 2)
+  discount        Decimal  @db.Decimal(12, 2)
+  total           Decimal  @db.Decimal(12, 2)
+  couponId        String?  @unique @map("coupon_id") @db.Uuid
+  couponCode      String?  @map("coupon_code")
+  discountPercent Int?     @map("discount_percent")
+  placedAt        DateTime @default(now()) @map("placed_at")
+
+  cart   Cart        @relation(fields: [cartId], references: [id])
+  coupon Coupon?     @relation(fields: [couponId], references: [id])
+  items  OrderItem[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId     String  @map("order_id") @db.Uuid
+  // Intentionally no FK to products: the order is a self-contained snapshot.
+  productId   String  @map("product_id") @db.Uuid
+  productName String  @map("product_name")
+  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  quantity    Int
+  lineTotal   Decimal @map("line_total") @db.Decimal(12, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model Coupon {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code            String       @unique
+  milestone       Int          @unique
+  discountPercent Int          @map("discount_percent")
+  status          CouponStatus @default(AVAILABLE)
+  generatedAt     DateTime     @default(now()) @map("generated_at")
+  redeemedAt      DateTime?    @map("redeemed_at")
+  redeemedOrderId String?      @unique @map("redeemed_order_id") @db.Uuid
+
+  order Order?
+
+  @@map("coupons")
+}

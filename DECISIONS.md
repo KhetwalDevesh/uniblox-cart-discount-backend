@@ -40,13 +40,13 @@ Status: **pre-implementation draft.** Sections marked _(to be completed)_ are fi
 
 **Context:** Totals and percent discounts must be exact and deterministic.
 
-**Options considered:** JS `number` dollars; decimal library; integer minor units; Postgres `numeric`.
+**Options considered:** plain JS float `number`; decimal library; integer minor units; Postgres `numeric`.
 
 **Choice:** Store money as `NUMERIC(12,2)` columns named `price`, `subtotal`, `discount`, `total`. The API exposes decimal strings (`"19.99"`). The repository layer converts to integer minor units (1999) on read and back on write; all arithmetic happens on those integers, guarded against exceeding the safe-integer range. Discount = `floor((subtotal * x + 50) / 100)`, clamped to `[0, subtotal]`.
 
 **Why:** `numeric` is exact and self-describing (a column called `price` holds 19.99, not 1999), and DB `CHECK`s work on it directly. Converting to integers at one boundary keeps JS floats out of money math with no extra dependency. Half-up is the common consumer expectation and is documented.
 
-**Consequences:** One conversion boundary that must be tested (parse/format round-trips, no `Number(decimal)` shortcuts). Single currency; multi-currency or fractional-cent tax would need a currency-aware Money type.
+**Consequences:** One conversion boundary that must be tested (parse/format round-trips, no `Number(decimal)` shortcuts). Amounts are plain numbers with no currency; supporting currencies or sub-cent precision (e.g. tax) would need a currency-aware Money type.
 
 ### Decision: Cart as the natural idempotency key
 
@@ -138,7 +138,7 @@ Summary of the plan: one transaction per checkout; locks taken in the fixed orde
 
 ## 5. Money and rounding rules
 
-`NUMERIC(12,2)` storage, integer-minor-unit arithmetic; single currency; discount `floor((subtotal*x + 50)/100)` clamped to `[0, subtotal]`; total = subtotal - discount; applied once to the order subtotal. _(Examples table added with Phase 1 tests.)_
+`NUMERIC(12,2)` storage, integer-minor-unit arithmetic; no currency concept (plain numbers); discount `floor((subtotal*x + 50)/100)` clamped to `[0, subtotal]`; total = subtotal - discount; applied once to the order subtotal. _(Examples table added with Phase 1 tests.)_
 
 ## 6. Error model
 
