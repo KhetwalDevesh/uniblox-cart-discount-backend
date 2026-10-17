@@ -3,6 +3,7 @@ import {
 	ConflictError,
 	NotFoundError,
 	PaymentDeclinedError,
+	ServiceUnavailableError,
 	UnprocessableError,
 	ValidationError,
 } from "../../src/domain/errors";
@@ -31,4 +32,10 @@ test("toBody gives the uniform error shape and omits absent details", () => {
 		lines: [{ productId: "a", requested: 5, available: 2 }],
 	}).toBody();
 	expect(withDetails.details).toEqual({ lines: [{ productId: "a", requested: 5, available: 2 }] });
+});
+
+test("ServiceUnavailableError is a retryable 503", () => {
+	const error = new ServiceUnavailableError();
+	expect(error.httpStatus).toBe(503);
+	expect(error.code).toBe("SERVICE_UNAVAILABLE");
 });

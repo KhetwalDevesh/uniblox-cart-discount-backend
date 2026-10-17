@@ -88,3 +88,11 @@ export class UnprocessableError extends AppError {
 		super(code, message, details);
 	}
 }
+
+/** 503: a dependency (the database) is temporarily unavailable. Safe for clients to retry. */
+export class ServiceUnavailableError extends AppError {
+	readonly httpStatus = 503;
+	constructor(message = "Service temporarily unavailable. Please try again.") {
+		super("SERVICE_UNAVAILABLE", message);
+	}
+}

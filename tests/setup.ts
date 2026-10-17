@@ -10,3 +10,4 @@ if (!/_test(\?|$)/.test(testUrl)) {
 }
 
 process.env.DATABASE_URL = testUrl;
+process.env.LOG_LEVEL = "silent";
