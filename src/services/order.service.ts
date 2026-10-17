@@ -14,4 +14,8 @@ export class OrderService {
 		if (!order) throw new NotFoundError("ORDER_NOT_FOUND", `Order ${id} does not exist`);
 		return toOrderView(order);
 	}
+
+	async list(): Promise<OrderView[]> {
+		return (await this.orders.list(this.db)).map(toOrderView);
+	}
 }

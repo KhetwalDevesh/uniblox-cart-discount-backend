@@ -6,3 +6,4 @@ export type { NewOrder, OrderItemRecord, OrderRecord } from "./order.repository"
 export { OrderRepository } from "./order.repository";
 export type { ProductRecord } from "./product.repository";
 export { ProductRepository } from "./product.repository";
+export { ReportRepository } from "./report.repository";

@@ -75,7 +75,7 @@ export function createApp(container: Container) {
 				.use(productRouter(container.catalog))
 				.use(cartRouter(container.carts, container.checkout))
 				.use(orderRouter(container.orders))
-				.use(adminRouter(container.coupons)),
+				.use(adminRouter(container.coupons, container.reports, container.orders)),
 		);
 }
 

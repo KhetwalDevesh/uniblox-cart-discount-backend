@@ -188,9 +188,10 @@ Base path `/api`. Errors always: `{ "status": "error", "code": "<STABLE_CODE>", 
 | GET | `/orders/:id` | 200 order (items, subtotal, discount, total, coupon) | 404 `ORDER_NOT_FOUND` |
 | POST | `/admin/coupons/generate` | 201 coupon | 409 `NO_ELIGIBLE_MILESTONE` |
 | GET | `/admin/coupons` | 200 list (filter `status`) | |
+| GET | `/admin/orders` | 200 list of all orders (same shape as `GET /orders/:id`; unpaginated) | |
 | GET | `/admin/report` | 200 summary | |
 
-Admin operations: coupon generation, coupon listing, report. Everything else is customer-facing. Product admin (create/restock) is deferred; seed data covers evaluation.
+Admin operations: coupon generation, coupon listing, order listing (needed to verify report reconciliation), report. Everything else is customer-facing. Product admin (create/restock) is deferred; seed data covers evaluation.
 
 Other endpoints: `GET /health`, `GET /swagger` (UI), `GET /swagger/json` (spec). `scripts/generate-openapi.ts` writes `openapi.json` to the repo for offline reading. Every route gets `detail.summary`, `detail.tags`, and typed `response` maps including the error shape.
 

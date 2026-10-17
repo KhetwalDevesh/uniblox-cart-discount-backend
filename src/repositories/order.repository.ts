@@ -108,4 +108,13 @@ export class OrderRepository {
 	async count(client: Tx): Promise<number> {
 		return client.order.count();
 	}
+
+	/** All orders, oldest first. Unpaginated: acceptable for this scope, see DECISIONS.md. */
+	async list(client: Tx): Promise<OrderRecord[]> {
+		const rows = await client.order.findMany({
+			include: withItems,
+			orderBy: [{ placedAt: "asc" }, { orderNumber: "asc" }],
+		});
+		return rows.map(toRecord);
+	}
 }

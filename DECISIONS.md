@@ -32,7 +32,7 @@ Status: **pre-implementation draft.** Sections marked _(to be completed)_ are fi
 | Checkout retry with a different coupon | `409 CART_ALREADY_CHECKED_OUT`; the original order stands. |
 | Cart quantity bounds | Integer 1..99 per line; adding an existing product increments, `PATCH` sets. |
 | Payment | `PaymentGateway` interface with a fake that approves; invoked inside the transaction so a decline rolls everything back. |
-| Which operations are admin | Coupon generation, coupon listing, report (`/api/admin/*`). No auth implemented. |
+| Which operations are admin | Coupon generation, coupon listing, order listing, report (`/api/admin/*`). The order listing exists so the report can be reconciled against orders the API returns; it is unpaginated (deferred). No auth implemented. |
 
 ## 3. Material decisions
 

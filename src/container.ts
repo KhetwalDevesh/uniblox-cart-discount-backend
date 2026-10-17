@@ -9,12 +9,14 @@ import {
 	CouponRepository,
 	OrderRepository,
 	ProductRepository,
+	ReportRepository,
 } from "./repositories";
 import { CartService } from "./services/cart.service";
 import { CatalogService } from "./services/catalog.service";
 import { CheckoutService } from "./services/checkout.service";
 import { CouponService } from "./services/coupon.service";
 import { OrderService } from "./services/order.service";
+import { ReportService } from "./services/report.service";
 
 /**
  * Composition root: the only place that wires concrete implementations together.
@@ -30,6 +32,7 @@ export type Container = {
 	checkout: CheckoutService;
 	orders: OrderService;
 	coupons: CouponService;
+	reports: ReportService;
 };
 
 /** Parts that tests may swap, for example a payment gateway that declines. */
@@ -62,5 +65,6 @@ export function createContainer(
 		),
 		orders: new OrderService(db, orderRepository),
 		coupons: new CouponService(db, transactions, couponRepository, orderRepository, config),
+		reports: new ReportService(transactions, new ReportRepository()),
 	};
 }
