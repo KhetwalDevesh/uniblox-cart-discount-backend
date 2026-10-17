@@ -15,6 +15,11 @@ COPY --from=install /app/node_modules node_modules
 COPY . .
 RUN bunx prisma generate
 
+# Test runner image: the full source tree plus dev dependencies, so the test suite and the race
+# demo run without Bun on the host (see the `tests` service in docker-compose.yml).
+FROM build AS test
+CMD ["bun", "test"]
+
 # Runtime image
 FROM base AS release
 # Owned by the unprivileged user: the prisma CLI writes to node_modules when applying migrations.

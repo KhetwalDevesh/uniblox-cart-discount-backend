@@ -214,7 +214,7 @@ GET {{baseUrl}}/admin/orders
 ################################################################################
 # These need parallel requests, which a .http file cannot send. Run:
 #
-#   bun run demo
+#   ./scripts/demo.sh      (curl + jq, run from your terminal)     or     bun run demo
 #
 # It races several carts for the limited-stock keycap set, retries one checkout many times at once,
 # and races carts for one coupon, then prints the outcome counts. Run `bun run db:seed` to reset stock.

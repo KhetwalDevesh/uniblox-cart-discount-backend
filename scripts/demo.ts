@@ -3,7 +3,8 @@
  *   bun run demo                      # API_URL defaults to http://localhost:4000
  * Re-run `bun run db:seed` to restore the limited stock between runs.
  */
-const BASE = `${process.env.API_URL ?? "http://localhost:4000"}/api`;
+const ROOT = process.env.API_URL ?? "http://localhost:4000";
+const BASE = `${ROOT}/api`;
 const KEYCAPS = "66666666-6666-4666-8666-666666666666"; // seeded with very limited stock
 const CABLE = "33333333-3333-4333-8333-333333333333";
 
@@ -46,9 +47,11 @@ async function cartWith(productId: string, quantity: number): Promise<string> {
 	return cart.body.id;
 }
 
-const health = await fetch(`${BASE.replace("/api", "")}/health`).catch(() => null);
+const health = await fetch(`${ROOT}/health`).catch(() => null);
 if (!health?.ok) {
-	console.error(`API is not reachable at ${BASE}. Start it with: bun run dev`);
+	console.error(
+		`API is not reachable at ${ROOT}. Start it with: bun run dev (or docker compose up -d --build --wait)`,
+	);
 	process.exit(1);
 }
 

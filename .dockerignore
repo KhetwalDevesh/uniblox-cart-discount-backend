@@ -4,8 +4,4 @@ node_modules
 .env
 .env.*
 !.env.example
-tests
-docs
-scripts
 *.md
-openapi.json

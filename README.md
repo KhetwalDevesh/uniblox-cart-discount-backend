@@ -11,19 +11,45 @@ Backend for an ecommerce store: carts, idempotent checkout, orders, and a discou
 
 ## How to run and test the application
 
+**The short version:** the API and database run in Docker; you drive them from your own terminal.
+
+```bash
+docker compose up -d --build --wait    # API + database in Docker (nothing else to install)
+./scripts/demo.sh                      # concurrent checkouts fired from your terminal (needs curl and jq)
+```
+
+Then try individual requests with the curl commands in section 4, or the Swagger UI at http://localhost:4000/swagger. The details of each step follow.
+
 ### 1. Prerequisites
 
 | Tool | Needed for | Check |
 |---|---|---|
-| [Bun](https://bun.sh) 1.x | running the app, tests and scripts | `bun --version` |
-| [Docker](https://www.docker.com) (Docker Desktop or Engine, **running**) | the PostgreSQL database | `docker info` |
+| [Docker](https://www.docker.com) with Compose (Docker Desktop or Engine, **running**) | running the database, the API and the tests | `docker info` |
 | `curl` and [`jq`](https://jqlang.github.io/jq/) | the manual testing steps in section 4 | `curl --version`, `jq --version` |
+| [Bun](https://bun.sh) 1.x | **optional**: only for the local development route (Option B) | `bun --version` |
 
-No credentials, accounts or external services are needed. Port **5433** (Postgres) and **4000** (API) must be free.
+You do not need Bun to run, test or try the application: Docker is enough. No credentials, accounts or external services are needed. Ports **5433** (Postgres) and **4000** (API) must be free.
 
-### 2. Set up and start the application
+### 2. Start the application
 
-Run these from the repository root, in order:
+Run these from the repository root.
+
+#### Option A: Docker only (no Bun needed)
+
+```bash
+docker compose up -d --build --wait
+```
+
+This builds the API image and starts PostgreSQL and the API, and returns once both are healthy (the first build takes a minute or two). The API container applies the database migrations and seeds the 7 demo products automatically, but only when the database is empty, so restarting it never resets your data. It runs as an unprivileged user.
+
+- API: **http://localhost:4000**, interactive Swagger UI: **http://localhost:4000/swagger**
+- Stop it: `docker compose down` (data is kept in a Docker volume). Wipe everything, including data: `docker compose down -v`.
+- Logs: `docker compose logs -f api`
+- Postgres is on host port 5433 so it does not clash with a local Postgres on 5432. Two databases exist: `cart_discount` (the app) and `cart_discount_test` (the tests, created on first start).
+
+#### Option B: local development with Bun
+
+For editing the code with hot reload. The database still runs in Docker.
 
 ```bash
 # 1. install dependencies
@@ -32,7 +58,7 @@ bun install
 # 2. create your environment file (the defaults work as-is)
 cp .env.example .env
 
-# 3. start PostgreSQL in Docker (waits until it is healthy)
+# 3. start only PostgreSQL in Docker (waits until it is healthy)
 bun run db:up
 
 # 4. generate the Prisma client
@@ -44,15 +70,15 @@ bun run db:deploy
 # 6. seed the data: 7 products, two of them with very limited stock
 bun run db:seed
 
-# 7. start the API
+# 7. start the API with hot reload
 bun run dev
 ```
 
-The API is now at **http://localhost:4000** and the interactive Swagger UI at **http://localhost:4000/swagger**.
+Stop with `Ctrl+C`, and `bun run db:down` to stop Postgres. Use either option, not both at once: the Option A container and `bun run dev` both listen on port 4000. (`bun run stack:up` and `bun run stack:down` are shortcuts for the Option A commands.)
 
-Notes:
-- Postgres runs on host port 5433 so it does not clash with a local Postgres on 5432. Two databases are created on first start: `cart_discount` (the app) and `cart_discount_test` (the tests). If you started the container before the test database existed, run `docker compose down -v` and then `bun run db:up` again.
-- Seeded products have fixed ids, so the commands below work on any machine:
+#### Seeded products
+
+The ids are fixed, so the commands in this README work on any machine:
 
 | Product | Price | Stock | Id |
 |---|---|---|---|
@@ -64,35 +90,29 @@ Notes:
 | Limited Edition Keycap Set | 59.00 | **3** | `66666666-6666-4666-8666-666666666666` |
 | Signed Collector Poster | 19.99 | **1** | `77777777-7777-4777-8777-777777777777` |
 
-- To stop: `Ctrl+C` in the `bun run dev` terminal, and `bun run db:down` to stop Postgres (data is kept in a Docker volume).
-
-#### Or run everything in Docker (no local Bun needed to run the API)
-
-```bash
-bun run stack:up       # builds the image and starts Postgres + the API; waits until both are healthy
-```
-
-The API container applies the migrations on start and seeds the 7 products when the database is empty, then serves on http://localhost:4000 (Swagger UI at `/swagger`). Stop it with `bun run stack:down`. The container and `bun run dev` both use port 4000, so run only one of them at a time. The image is pinned to the same Bun version as the lockfile and runs as an unprivileged user.
-
 ### 3. Run the automated tests
 
-```bash
-bun test
-```
+| Route | Command |
+|---|---|
+| Docker only | `docker compose run --rm tests` (starts Postgres if needed; the first run builds a test image) |
+| With Bun | `bun run db:up`, then `bun test` |
 
-Postgres must be running (`bun run db:up`). The tests use the separate `cart_discount_test` database, migrate it automatically, and refuse to run against any database not named `*_test`, so your dev data is never touched. They include concurrency tests (parallel checkouts racing for stock and coupons, retry storms, concurrent coupon generation, reports taken while orders commit) and tests that bypass the application to prove the database constraints themselves.
+The tests use the separate `cart_discount_test` database, migrate it automatically, and refuse to run against any database not named `*_test`, so your app data is never touched. They include concurrency tests (parallel checkouts racing for stock and coupons, retry storms, concurrent coupon generation, reports taken while orders commit) and tests that bypass the application to prove the database constraints themselves. Expected result: 141 tests pass.
 
-Other checks: `bun run typecheck` and `bun run lint`.
+With Bun you can also run `bun run typecheck` and `bun run lint`.
 
 ### 4. Manual testing with curl
 
-Start from a clean state (stock restored, no orders), then keep the API running in another terminal:
+Start from a clean state (stock restored, no orders). Keep the API running (section 2).
 
 ```bash
-bun run db:seed   # restores seeded stock and prices; see section 6 to also clear orders
+# Docker only:
+docker compose exec api bun src/db/seed.ts
+# With Bun:
+bun run db:seed
 ```
 
-Every step below prints the response body and the HTTP status. The coupon steps assume the default `COUPON_EVERY_N_ORDERS=3`. Commands work in bash and zsh.
+Both restore the seeded names, prices and stock but keep existing orders; see section 6 to also clear orders.
 
 **Step 0: set up variables and helpers (once per terminal)**
 
@@ -221,7 +241,7 @@ show -X POST $API/carts/$PCART/checkout -H "$JSON" -d '{}'
 show -X POST $API/carts/$PCART/checkout -H "$JSON" -d '{"acceptPriceChanges":true}'
 #   -> HTTP 201  charged at the live price: total 60.00
 
-bun run db:seed                      # restore the mouse price and stock
+docker compose exec api bun src/db/seed.ts   # restore the mouse price and stock (with Bun: bun run db:seed)
 ```
 
 **Step 7: coupons** (every 3rd placed order reaches a milestone; an admin generates the coupon)
@@ -313,15 +333,16 @@ curl -s $API/admin/orders | jq '{
 | Interactive docs (Swagger UI), with "Try it out" | http://localhost:4000/swagger |
 | OpenAPI 3 document | [openapi.json](./openapi.json) (regenerate with `bun run openapi`; a test fails if it is stale) |
 | The same walkthrough as ready-to-run requests | [docs/api.http](./docs/api.http) (VS Code REST Client or IntelliJ HTTP Client) |
-| Automated concurrency proof against the running server | `bun run demo` (prints outcome counts, exits non-zero if a guarantee breaks) |
+| Concurrent checkouts fired from **your terminal** against the running API | `./scripts/demo.sh` (needs only `curl` and `jq`). Races carts for the limited stock, retries one checkout 8 times at once, races carts for one coupon, and reconciles the report. Prints outcome counts and exits non-zero if a guarantee breaks. Run `docker compose exec api bun src/db/seed.ts` first to restore the limited stock. |
+| The same demo as a script run inside Docker (no `jq` needed), or with Bun | `docker compose run --rm -e API_URL=http://api:4000 tests bun scripts/demo.ts`, or `bun run demo` |
 
 ### 6. Resetting state
 
 | Goal | Command |
 |---|---|
-| Restore seeded product names, prices and stock (keeps orders) | `bun run db:seed` |
-| Also clear carts, orders and coupons | `docker exec cart-discount-postgres psql -U postgres -d cart_discount -c "TRUNCATE order_items, orders, coupons, cart_items, carts RESTART IDENTITY CASCADE"` then `bun run db:seed` |
-| Wipe everything, including the Docker volume | `docker compose down -v`, then repeat section 2 from `bun run db:up` |
+| Restore seeded product names, prices and stock (keeps orders) | `docker compose exec api bun src/db/seed.ts`, or with Bun: `bun run db:seed` |
+| Also clear carts, orders and coupons | `docker exec cart-discount-postgres psql -U postgres -d cart_discount -c "TRUNCATE order_items, orders, coupons, cart_items, carts RESTART IDENTITY CASCADE"` then restore the products as above |
+| Wipe everything, including the Docker volume | `docker compose down -v`, then start again as in section 2 |
 
 ## Configuration
 
@@ -376,7 +397,7 @@ src/
 prisma/           schema and migrations (with hand-written CHECK constraints)
 tests/            unit and integration tests against a real database
 docs/api.http     executable request walkthrough
-scripts/          openapi generator, race demo, test-database migration
+scripts/          concurrency demo (demo.sh with curl, demo.ts with Bun), openapi generator, test-database migration
 ```
 
 ## Known limitations

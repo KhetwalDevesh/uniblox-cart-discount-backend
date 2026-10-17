@@ -41,5 +41,22 @@ services:
       timeout: 5s
       retries: 12
 
+  # Test runner, for machines without Bun. Not started by `up`; run it explicitly:
+  #   docker compose run --rm tests                       # the automated tests
+  #   docker compose run --rm -e API_URL=http://api:4000 tests bun scripts/demo.ts   # the race demo
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      target: test
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cart_discount?schema=public
+      TEST_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cart_discount_test?schema=public
+      COUPON_EVERY_N_ORDERS: 3
+      COUPON_DISCOUNT_PERCENT: 10
+
 volumes:
   postgres_data:

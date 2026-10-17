@@ -323,13 +323,13 @@ Other choices: a successful replay is `200` with `Idempotent-Replayed: true`, di
 | Advisory lock on generation | The 10-way single-milestone test fails; the two-milestone variant still passes (the unique constraint settles it), so the lock is proven by one test |
 | Report `REPEATABLE READ` | Consistency test fails in 3 of 3 runs |
 
-**Other validation.** [scripts/demo.ts](scripts/demo.ts) (`bun run demo`) runs the oversell, retry-storm and coupon races against a real running server and reconciles the report. I also did a fresh clone with brand-new databases in a clean environment and followed the README, which found a real bug (see [section 11](#11-how-i-used-ai-tools)).
+**Other validation.** [scripts/demo.sh](scripts/demo.sh) (curl and jq, run from the terminal) and [scripts/demo.ts](scripts/demo.ts) (`bun run demo`) run the oversell, retry-storm and coupon races against a real running server and reconcile the report. I also did a fresh clone with brand-new databases in a clean environment and followed the README, which found a real bug (see [section 11](#11-how-i-used-ai-tools)).
 
 ---
 
 ## 8. Implemented vs deferred
 
-**Implemented:** products and seed data; a Dockerfile and compose `api` service so the whole stack starts with `bun run stack:up` (migrates, seeds an empty database, runs as an unprivileged user); carts (create, view, add, set, remove) with validation; checkout with idempotent replay, price and stock re-validation, coupons and a payment port; orders as snapshots; milestone coupon generation and single-use redemption; admin listing and a self-checking report; Swagger UI, `openapi.json`, an executable `.http` walkthrough and a race demo script.
+**Implemented:** products and seed data; a Dockerfile and compose services so the API, the tests and the race demo all run with Docker alone and no Bun on the host (`docker compose up -d --build --wait`; the API container migrates, seeds an empty database and runs as an unprivileged user); carts (create, view, add, set, remove) with validation; checkout with idempotent replay, price and stock re-validation, coupons and a payment port; orders as snapshots; milestone coupon generation and single-use redemption; admin listing and a self-checking report; Swagger UI, `openapi.json`, an executable `.http` walkthrough and a race demo script.
 
 **Deferred on purpose:**
 
