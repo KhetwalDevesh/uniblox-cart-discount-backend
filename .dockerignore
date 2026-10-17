@@ -1,0 +1,11 @@
+node_modules
+.git
+.husky
+.env
+.env.*
+!.env.example
+tests
+docs
+scripts
+*.md
+openapi.json

@@ -37,6 +37,14 @@ const PRODUCTS = [
 	},
 ];
 
+// `--if-empty` (used by the Docker start-up) seeds only a database that has no products yet.
+if (process.argv.includes("--if-empty") && (await db.product.count()) > 0) {
+	console.log("Products already exist; skipping seed.");
+	await db.$disconnect();
+	await pool.end();
+	process.exit(0);
+}
+
 // Re-running resets name, price and stock of the seeded products to these values.
 for (const product of PRODUCTS) {
 	await db.product.upsert({

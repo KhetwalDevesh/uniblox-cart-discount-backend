@@ -323,4 +323,4 @@ What changed while implementing, and why:
 | `docs/api.http` and an OpenAPI file | Also a typed error catalog rendered into the docs, and `bun run demo` | Docs cannot drift from code; concurrency is demonstrable |
 | Strict `t.Integer` quantities | Plain TypeBox `Type.Integer` | Elysia's `t.Integer` coerces numeric strings |
 | `db:test:migrate` shell script | A Bun script, also run by the test setup | The shell version silently migrated nothing in a clean environment |
-| Phase 10 (Dockerfile, `api` compose service) | Not done; the race demo script was done | Out of timebox; listed as deferred |
+| Phase 10 (Dockerfile, `api` compose service, race demo) | Done: multi-stage Dockerfile pinned to the local Bun version, an entrypoint that applies migrations and seeds only an empty database, a compose `api` service with a healthcheck, `bun run stack:up`, and the race demo | Verified from an empty volume, including running the demo against the container |

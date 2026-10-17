@@ -8,6 +8,8 @@
 		"start": "bun src/index.ts",
 		"db:up": "docker compose up -d --wait postgres",
 		"db:down": "docker compose down",
+		"stack:up": "docker compose up -d --build --wait",
+		"stack:down": "docker compose down",
 		"db:generate": "bunx prisma generate",
 		"db:migrate": "bunx prisma migrate dev",
 		"db:deploy": "bunx prisma migrate deploy",

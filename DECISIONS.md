@@ -329,7 +329,7 @@ Other choices: a successful replay is `200` with `Idempotent-Replayed: true`, di
 
 ## 8. Implemented vs deferred
 
-**Implemented:** products and seed data; carts (create, view, add, set, remove) with validation; checkout with idempotent replay, price and stock re-validation, coupons and a payment port; orders as snapshots; milestone coupon generation and single-use redemption; admin listing and a self-checking report; Swagger UI, `openapi.json`, an executable `.http` walkthrough and a race demo script.
+**Implemented:** products and seed data; a Dockerfile and compose `api` service so the whole stack starts with `bun run stack:up` (migrates, seeds an empty database, runs as an unprivileged user); carts (create, view, add, set, remove) with validation; checkout with idempotent replay, price and stock re-validation, coupons and a payment port; orders as snapshots; milestone coupon generation and single-use redemption; admin listing and a self-checking report; Swagger UI, `openapi.json`, an executable `.http` walkthrough and a race demo script.
 
 **Deferred on purpose:**
 
@@ -344,7 +344,6 @@ Other choices: a successful replay is `200` with `Idempotent-Replayed: true`, di
 | Order cancellation and refunds | Would need rules for restoring stock and coupons |
 | Pagination of admin lists | Fine at this scale |
 | Rate limiting, metrics, tracing | Production concerns |
-| Dockerfile and an `api` service in compose | Postgres runs in Docker; the app runs with Bun locally |
 | Cleaning up abandoned carts | They are cheap rows |
 
 ---
@@ -411,4 +410,4 @@ In rough priority order:
 4. **Coupon abuse protection:** redemption rate limiting and expiry.
 5. **Automate the mutation checks** so each guard is verified on every run, not by hand.
 6. **Pagination and indexes** for the admin lists and a check of the report's query plans.
-7. **A Dockerfile and compose `api` service** so the whole stack starts with one command.
+7. **Harden the container image:** a production-only dependency install, a CI image build, and a healthcheck that also verifies the database round trip.

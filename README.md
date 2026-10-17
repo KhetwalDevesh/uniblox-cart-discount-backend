@@ -66,6 +66,14 @@ Notes:
 
 - To stop: `Ctrl+C` in the `bun run dev` terminal, and `bun run db:down` to stop Postgres (data is kept in a Docker volume).
 
+#### Or run everything in Docker (no local Bun needed to run the API)
+
+```bash
+bun run stack:up       # builds the image and starts Postgres + the API; waits until both are healthy
+```
+
+The API container applies the migrations on start and seeds the 7 products when the database is empty, then serves on http://localhost:4000 (Swagger UI at `/swagger`). Stop it with `bun run stack:down`. The container and `bun run dev` both use port 4000, so run only one of them at a time. The image is pinned to the same Bun version as the lockfile and runs as an unprivileged user.
+
 ### 3. Run the automated tests
 
 ```bash

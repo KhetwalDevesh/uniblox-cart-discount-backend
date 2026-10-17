@@ -18,5 +18,28 @@ services:
       timeout: 5s
       retries: 10
 
+  # The API itself. `bun run db:up` starts only Postgres (for local development);
+  # `bun run stack:up` builds and starts Postgres and the API together.
+  api:
+    build: .
+    container_name: cart-discount-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cart_discount?schema=public
+      PORT: 4000
+      COUPON_EVERY_N_ORDERS: 3
+      COUPON_DISCOUNT_PERCENT: 10
+      # seed the 7 demo products on start, only when the products table is empty
+      SEED_ON_START: "true"
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:4000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
 volumes:
   postgres_data:
