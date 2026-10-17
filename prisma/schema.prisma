@@ -72,7 +72,7 @@ model Order {
   placedAt        DateTime @default(now()) @map("placed_at")
 
   cart   Cart        @relation(fields: [cartId], references: [id])
-  coupon Coupon?     @relation(fields: [couponId], references: [id])
+  coupon Coupon?     @relation(fields: [couponId], references: [id], onDelete: Restrict)
   items  OrderItem[]
 
   @@map("orders")

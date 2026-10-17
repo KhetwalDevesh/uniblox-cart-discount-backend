@@ -12,8 +12,9 @@ Stack: Bun, Elysia, Prisma, PostgreSQL (Docker), Swagger UI.
 bun install
 cp .env.example .env          # already done if .env exists
 bun run db:up                 # starts Postgres on localhost:5433 (waits until healthy)
-bun run db:migrate            # applies migrations   (available from phase 2)
-bun run db:seed               # seeds products       (available from phase 2)
+bun run db:migrate            # applies migrations to the dev database
+bun run db:seed               # seeds 7 products (two with very low stock); re-running resets them
+bun run db:test:migrate       # applies migrations to the test database (needed once before bun test)
 bun run dev                   # API on http://localhost:4000, Swagger UI at /swagger (phase 3)
 bun test                      # runs tests against the test database
 ```

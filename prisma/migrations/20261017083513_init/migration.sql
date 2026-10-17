@@ -114,7 +114,47 @@ ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_product_id_fkey" FOREIGN KEY
 ALTER TABLE "orders" ADD CONSTRAINT "orders_cart_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "orders" ADD CONSTRAINT "orders_coupon_id_fkey" FOREIGN KEY ("coupon_id") REFERENCES "coupons"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "orders" ADD CONSTRAINT "orders_coupon_id_fkey" FOREIGN KEY ("coupon_id") REFERENCES "coupons"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- ---------------------------------------------------------------------------------------------
+-- Hand-written CHECK constraints (Prisma's schema DSL cannot express them).
+-- These are the database-level backstops for the invariants in DECISIONS.md: even a bug in the
+-- application code cannot persist a negative stock, an unbalanced order, or a bad coupon.
+-- ---------------------------------------------------------------------------------------------
+
+-- I1: stock never negative; prices never negative
+ALTER TABLE "products" ADD CONSTRAINT "products_price_non_negative" CHECK ("price" >= 0);
+ALTER TABLE "products" ADD CONSTRAINT "products_stock_non_negative" CHECK ("stock" >= 0);
+
+-- cart state is consistent and quantities are within the allowed range
+ALTER TABLE "carts" ADD CONSTRAINT "carts_checked_out_at_matches_status"
+  CHECK (("status" = 'CHECKED_OUT') = ("checked_out_at" IS NOT NULL));
+ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_quantity_range" CHECK ("quantity" BETWEEN 1 AND 99);
+ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_unit_price_at_add_non_negative" CHECK ("unit_price_at_add" >= 0);
+
+-- I8: 0 <= total <= subtotal and total = subtotal - discount
+ALTER TABLE "orders" ADD CONSTRAINT "orders_amounts_balance" CHECK (
+  "subtotal" >= 0 AND "discount" >= 0 AND "discount" <= "subtotal" AND "total" = "subtotal" - "discount"
+);
+-- coupon snapshot fields are all present or all absent, and a discount requires a coupon
+ALTER TABLE "orders" ADD CONSTRAINT "orders_coupon_snapshot_consistent" CHECK (
+  ("coupon_id" IS NULL) = ("coupon_code" IS NULL)
+  AND ("coupon_id" IS NULL) = ("discount_percent" IS NULL)
+  AND ("discount_percent" IS NULL OR "discount_percent" BETWEEN 0 AND 100)
+  AND ("discount" = 0 OR "coupon_id" IS NOT NULL)
+);
+
+-- I7: order lines are internally consistent
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_quantity_positive" CHECK ("quantity" > 0);
+ALTER TABLE "order_items" ADD CONSTRAINT "order_items_amounts_balance" CHECK (
+  "unit_price" >= 0 AND "line_total" = "unit_price" * "quantity"
+);
+
+-- coupons: valid milestone/percent, and a redeemed coupon has a redemption time
+ALTER TABLE "coupons" ADD CONSTRAINT "coupons_milestone_positive" CHECK ("milestone" >= 1);
+ALTER TABLE "coupons" ADD CONSTRAINT "coupons_discount_percent_range" CHECK ("discount_percent" BETWEEN 1 AND 100);
+ALTER TABLE "coupons" ADD CONSTRAINT "coupons_redeemed_at_matches_status"
+  CHECK (("status" = 'REDEEMED') = ("redeemed_at" IS NOT NULL));

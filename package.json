@@ -12,6 +12,7 @@
 		"db:migrate": "bunx prisma migrate dev",
 		"db:deploy": "bunx prisma migrate deploy",
 		"db:seed": "bun src/db/seed.ts",
+		"db:test:migrate": "DATABASE_URL=$TEST_DATABASE_URL bunx prisma migrate deploy",
 		"test": "bun test --max-concurrency 1",
 		"openapi": "bun scripts/generate-openapi.ts",
 		"typecheck": "tsc --noEmit",
