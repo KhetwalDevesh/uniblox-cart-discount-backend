@@ -66,9 +66,9 @@ Status: **pre-implementation draft.** Sections marked _(to be completed)_ are fi
 
 **Options considered:** `SERIALIZABLE` with retry; optimistic version column with retry; `SELECT ... FOR UPDATE`; conditional `UPDATE` (compare-and-set in SQL); in-process mutex.
 
-**Choice:** `READ COMMITTED` transaction. Lock the cart row `FOR UPDATE`, then claim stock and coupon with conditional `UPDATE`s, products in sorted id order.
+**Choice:** `READ COMMITTED` transaction. Lock the cart row `FOR UPDATE`, then lock the products' rows in one `ORDER BY id FOR UPDATE` statement, validate price and stock against those locked rows, and take stock with a conditional `UPDATE ... WHERE stock >= q` (compare-and-set), asserting one row changed. The coupon is claimed the same way.
 
-**Why:** Conditional updates make the guard and the write one atomic statement, so the invariant does not depend on reading first. Sorted order prevents deadlocks. An in-process mutex would break with more than one instance.
+**Why:** Locking the product rows means the price validated is the price stored in the order, and the stock checked is the stock taken. The conditional update makes the guard and the write one atomic statement, so stock stays correct even if the lock were missing (mutation test: removing only the product lock still passes; removing the guard too fails the oversell tests). Locking all rows in one ordered statement prevents deadlocks. An in-process mutex would break with more than one instance.
 
 **Consequences:** Hot products serialize on their row (acceptable here). `SERIALIZABLE` would be simpler to reason about but needs retry plumbing and aborts more under contention.
 

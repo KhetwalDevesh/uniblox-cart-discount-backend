@@ -5,6 +5,7 @@ import { ServiceUnavailableError } from "./domain/errors";
 import { errorHandler } from "./lib/error-handler";
 import { log } from "./lib/logger";
 import { cartRouter } from "./router/carts";
+import { orderRouter } from "./router/orders";
 import { productRouter } from "./router/products";
 import { ErrorResponse } from "./schemas/common";
 
@@ -69,7 +70,10 @@ export function createApp(container: Container) {
 			},
 		)
 		.group("/api", (api) =>
-			api.use(productRouter(container.catalog)).use(cartRouter(container.carts)),
+			api
+				.use(productRouter(container.catalog))
+				.use(cartRouter(container.carts, container.checkout))
+				.use(orderRouter(container.orders)),
 		);
 }
 

@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import {
 	AddItemBody,
 	CartItemParams,
@@ -7,11 +7,13 @@ import {
 	SetQuantityBody,
 } from "../schemas/cart";
 import { ErrorResponse } from "../schemas/common";
+import { CheckoutBody, OrderModel } from "../schemas/order";
 import type { CartService } from "../services/cart.service";
+import type { CheckoutService } from "../services/checkout.service";
 
 const mutationErrors = { 400: ErrorResponse, 404: ErrorResponse, 409: ErrorResponse };
 
-export const cartRouter = (carts: CartService) =>
+export const cartRouter = (carts: CartService, checkout: CheckoutService) =>
 	new Elysia({ prefix: "/carts", tags: ["Carts"] })
 		.post(
 			"/",
@@ -82,6 +84,45 @@ export const cartRouter = (carts: CartService) =>
 					description:
 						"Removes the line. Re-adding the product records the current price. Errors: " +
 						"`404 CART_NOT_FOUND` / `ITEM_NOT_IN_CART`, `409 CART_NOT_OPEN`.",
+				},
+			},
+		)
+		.post(
+			"/:id/checkout",
+			async ({ params, body, set }) => {
+				const result = await checkout.checkout(params.id, body ?? {});
+				if (result.replayed) {
+					set.headers["idempotent-replayed"] = "true";
+					set.status = 200;
+				} else {
+					set.status = 201;
+				}
+				return result.order;
+			},
+			{
+				params: CartParams,
+				body: t.Optional(CheckoutBody),
+				response: {
+					200: OrderModel,
+					201: OrderModel,
+					400: ErrorResponse,
+					402: ErrorResponse,
+					404: ErrorResponse,
+					409: ErrorResponse,
+					422: ErrorResponse,
+				},
+				detail: {
+					summary: "Check out a cart",
+					description:
+						"Validates the cart and places the order in one transaction: re-checks prices and stock, " +
+						"takes the stock, charges payment, stores the order and closes the cart.\n\n" +
+						"**Safe to retry.** The cart is the idempotency key: a repeated request for a cart that was " +
+						"already checked out returns the original order with `200` and header `Idempotent-Replayed: true`. " +
+						"No second order and no second stock deduction.\n\n" +
+						"Success: `201` with the new order. Errors: `404 CART_NOT_FOUND`, `422 CART_EMPTY`, " +
+						"`409 PRICE_CHANGED` (details list old/new price per line; retry with `acceptPriceChanges: true`), " +
+						"`409 INSUFFICIENT_STOCK` (details list every short line), `402 PAYMENT_DECLINED`. " +
+						"A failed checkout changes nothing: stock and the cart are untouched.",
 				},
 			},
 		);

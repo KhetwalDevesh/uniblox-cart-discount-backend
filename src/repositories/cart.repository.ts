@@ -95,4 +95,27 @@ export class CartRepository {
 		const { count } = await tx.cartItem.deleteMany({ where: { cartId, productId } });
 		return count > 0;
 	}
+
+	/** Lines as recorded in the cart, without live product data (checkout reads that under lock). */
+	async findCheckoutLines(
+		tx: Tx,
+		cartId: string,
+	): Promise<{ productId: string; quantity: number; unitPriceAtAdd: Minor }[]> {
+		const items = await tx.cartItem.findMany({
+			where: { cartId },
+			orderBy: [{ productId: "asc" }],
+		});
+		return items.map((item) => ({
+			productId: item.productId,
+			quantity: item.quantity,
+			unitPriceAtAdd: decimalToMinor(item.unitPriceAtAdd),
+		}));
+	}
+
+	async markCheckedOut(tx: Tx, cartId: string): Promise<void> {
+		await tx.cart.update({
+			where: { id: cartId },
+			data: { status: "CHECKED_OUT", checkedOutAt: new Date() },
+		});
+	}
 }
