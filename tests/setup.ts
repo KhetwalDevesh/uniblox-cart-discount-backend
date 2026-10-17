@@ -10,4 +10,13 @@ if (!/_test(\?|$)/.test(testUrl)) {
 }
 
 process.env.DATABASE_URL = testUrl;
+
+// Bring the test database up to date so `bun test` works on a fresh checkout. Takes about a second.
+const migrate = Bun.spawnSync(["bun", "scripts/migrate-test.ts"], {
+	stdout: "pipe",
+	stderr: "pipe",
+});
+if (migrate.exitCode !== 0) {
+	throw new Error(`Could not migrate the test database:\n${migrate.stdout}${migrate.stderr}`);
+}
 process.env.LOG_LEVEL = "silent";

@@ -2,7 +2,9 @@
 
 Backend for an ecommerce store: carts, checkout, orders, and an "every nth order earns a coupon" reward. Correctness under retries and concurrency is the main goal; CRUD is incidental.
 
-Companion doc: [DECISIONS.md](./DECISIONS.md) (design rationale, filled in progressively as phases land).
+Companion docs: [DECISIONS.md](./DECISIONS.md) (design rationale, final) and [README.md](./README.md) (setup and usage).
+
+**Status:** phases 0 to 9 are implemented. This file is the plan as written; see "Deviations from the plan" at the end for what changed during implementation.
 
 ## 1. Tech stack
 
@@ -306,3 +308,19 @@ Authentication/authorization, coupon expiry and per-customer binding, product ad
 - Test isolation: truncate with `RESTART IDENTITY CASCADE`; do not run test files in parallel against one DB (`bun test --max-concurrency 1` or per-file schema).
 - Report totals (`gross`, `discounts`, `net`) are summed in SQL on `numeric`, or in integer minor units; never as JS floats.
 - Prisma returns `bigint` for aggregates and `Decimal` for `numeric`: convert at the repository boundary (decimal string -> integer minor units) so no float ever touches money. Never use `Number(decimal)` for arithmetic.
+
+## 13. Deviations from the plan
+
+What changed while implementing, and why:
+
+| Plan | Implemented | Reason |
+|---|---|---|
+| Money in integer `*_cents` columns, one currency | `NUMERIC(12,2)` columns named `price`, `subtotal`, ...; integer arithmetic at the repository boundary; no currency | Honest column names; exact in the DB; no float contact |
+| Price guard via optional `expectedTotalCents` | Checkout rejects changed prices with `409 PRICE_CHANGED` unless `acceptPriceChanges: true` | Safe by default |
+| `PATCH` refreshes a line's recorded price | Quantity changes never refresh it | Refreshing would accept a changed price silently |
+| Claim stock with a conditional `UPDATE` only | Lock product rows first (`ORDER BY id FOR UPDATE`), validate against them, then compare-and-set | The validated price is the stored price; the update still guards on its own |
+| Admin operations: generate, list coupons, report | Added `GET /admin/orders` | Needed to verify the report reconciles with API data |
+| `docs/api.http` and an OpenAPI file | Also a typed error catalog rendered into the docs, and `bun run demo` | Docs cannot drift from code; concurrency is demonstrable |
+| Strict `t.Integer` quantities | Plain TypeBox `Type.Integer` | Elysia's `t.Integer` coerces numeric strings |
+| `db:test:migrate` shell script | A Bun script, also run by the test setup | The shell version silently migrated nothing in a clean environment |
+| Phase 10 (Dockerfile, `api` compose service) | Not done; the race demo script was done | Out of timebox; listed as deferred |
