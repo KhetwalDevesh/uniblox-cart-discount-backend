@@ -1,6 +1,7 @@
 import { type App, createApp } from "../../src/app";
-import { loadConfig } from "../../src/config/env";
+import { type Config, loadConfig } from "../../src/config/env";
 import { type ContainerOverrides, createContainer } from "../../src/container";
+import { createProduct } from "./db";
 
 export type ApiResult = {
 	status: number;
@@ -9,9 +10,29 @@ export type ApiResult = {
 	body: any;
 };
 
-/** Builds an app against the real database, optionally swapping parts such as the payment gateway. */
-export function createTestApp(overrides: ContainerOverrides = {}): App {
-	return createApp(createContainer(loadConfig(), overrides));
+/** Coupon rule used by tests regardless of .env: every 3rd order earns a 10% coupon. */
+export const TEST_COUPON_EVERY_N = 3;
+export const TEST_COUPON_PERCENT = 10;
+
+/**
+ * Builds an app against the real database, optionally swapping parts such as the payment gateway
+ * or the coupon rule.
+ */
+export function createTestApp(
+	overrides: ContainerOverrides = {},
+	config: Partial<Config> = {},
+): App {
+	return createApp(
+		createContainer(
+			{
+				...loadConfig(),
+				couponEveryNOrders: TEST_COUPON_EVERY_N,
+				couponDiscountPercent: TEST_COUPON_PERCENT,
+				...config,
+			},
+			overrides,
+		),
+	);
 }
 
 /** Calls an app in-process (no network) so the real pool, locks and handlers are exercised. */
@@ -65,5 +86,22 @@ export async function cartWith(
 
 export const checkout = (cartId: string, body?: unknown, client = defaultClient) =>
 	client.post(`/carts/${cartId}/checkout`, body);
+
+/** Places `count` successful orders (each a fresh cart with one unit of a fresh product). */
+export async function placeOrders(count: number, client = defaultClient): Promise<void> {
+	for (let i = 0; i < count; i++) {
+		const product = await createProduct({ name: `Filler ${i}`, price: "10.00", stock: 5 });
+		const cartId = await cartWith([{ productId: product.id, quantity: 1 }], client);
+		const result = await checkout(cartId, undefined, client);
+		if (result.status !== 201) throw new Error(`setup failed: ${JSON.stringify(result.body)}`);
+	}
+}
+
+/** Generates the next coupon through the admin API and returns its code. */
+export async function generateCoupon(client = defaultClient): Promise<string> {
+	const result = await client.post("/admin/coupons/generate");
+	if (result.status !== 201) throw new Error(`setup failed: ${JSON.stringify(result.body)}`);
+	return result.body.code as string;
+}
 
 export const MISSING_ID = "99999999-9999-4999-8999-999999999999";

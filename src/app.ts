@@ -4,6 +4,7 @@ import type { Container } from "./container";
 import { ServiceUnavailableError } from "./domain/errors";
 import { errorHandler } from "./lib/error-handler";
 import { log } from "./lib/logger";
+import { adminRouter } from "./router/admin";
 import { cartRouter } from "./router/carts";
 import { orderRouter } from "./router/orders";
 import { productRouter } from "./router/products";
@@ -73,7 +74,8 @@ export function createApp(container: Container) {
 			api
 				.use(productRouter(container.catalog))
 				.use(cartRouter(container.carts, container.checkout))
-				.use(orderRouter(container.orders)),
+				.use(orderRouter(container.orders))
+				.use(adminRouter(container.coupons)),
 		);
 }
 

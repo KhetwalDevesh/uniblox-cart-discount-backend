@@ -4,10 +4,16 @@ import { db } from "./db";
 import { PrismaTransactionRunner, type TransactionRunner } from "./db/transaction";
 import { FakePaymentGateway } from "./payment/fake-payment-gateway";
 import type { PaymentGateway } from "./payment/payment-gateway";
-import { CartRepository, OrderRepository, ProductRepository } from "./repositories";
+import {
+	CartRepository,
+	CouponRepository,
+	OrderRepository,
+	ProductRepository,
+} from "./repositories";
 import { CartService } from "./services/cart.service";
 import { CatalogService } from "./services/catalog.service";
 import { CheckoutService } from "./services/checkout.service";
+import { CouponService } from "./services/coupon.service";
 import { OrderService } from "./services/order.service";
 
 /**
@@ -23,6 +29,7 @@ export type Container = {
 	carts: CartService;
 	checkout: CheckoutService;
 	orders: OrderService;
+	coupons: CouponService;
 };
 
 /** Parts that tests may swap, for example a payment gateway that declines. */
@@ -36,6 +43,7 @@ export function createContainer(
 	const productRepository = new ProductRepository();
 	const cartRepository = new CartRepository();
 	const orderRepository = new OrderRepository();
+	const couponRepository = new CouponRepository();
 	const payments = overrides.payments ?? new FakePaymentGateway();
 
 	return {
@@ -49,8 +57,10 @@ export function createContainer(
 			cartRepository,
 			productRepository,
 			orderRepository,
+			couponRepository,
 			payments,
 		),
 		orders: new OrderService(db, orderRepository),
+		coupons: new CouponService(db, transactions, couponRepository, orderRepository, config),
 	};
 }

@@ -29,6 +29,7 @@ export type NewOrder = {
 	subtotal: Minor;
 	discount: Minor;
 	total: Minor;
+	coupon?: { id: string; code: string; discountPercent: number };
 };
 
 const withItems = { items: { orderBy: [{ productName: "asc" as const }, { id: "asc" as const }] } };
@@ -75,6 +76,9 @@ export class OrderRepository {
 				subtotal: formatMoney(order.subtotal),
 				discount: formatMoney(order.discount),
 				total: formatMoney(order.total),
+				couponId: order.coupon?.id,
+				couponCode: order.coupon?.code,
+				discountPercent: order.coupon?.discountPercent,
 				items: {
 					create: order.lines.map((line) => ({
 						productId: line.productId,
@@ -98,5 +102,10 @@ export class OrderRepository {
 	async findByCartId(client: Tx, cartId: string): Promise<OrderRecord | null> {
 		const row = await client.order.findUnique({ where: { cartId }, include: withItems });
 		return row ? toRecord(row) : null;
+	}
+
+	/** Number of successfully placed orders: the basis for reward milestones. */
+	async count(client: Tx): Promise<number> {
+		return client.order.count();
 	}
 }

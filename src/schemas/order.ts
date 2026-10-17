@@ -33,6 +33,15 @@ export const OrderModel = t.Object(
 export const OrderParams = t.Object({ id: Uuid });
 
 export const CheckoutBody = t.Object({
+	couponCode: t.Optional(
+		t.String({
+			minLength: 1,
+			maxLength: 64,
+			description:
+				"Single-use coupon code (case-insensitive). Invalid codes fail the whole checkout.",
+			examples: ["SAVE10-K7Q2XM4P"],
+		}),
+	),
 	acceptPriceChanges: t.Optional(
 		t.Boolean({
 			description:

@@ -119,7 +119,11 @@ export const cartRouter = (carts: CartService, checkout: CheckoutService) =>
 						"**Safe to retry.** The cart is the idempotency key: a repeated request for a cart that was " +
 						"already checked out returns the original order with `200` and header `Idempotent-Replayed: true`. " +
 						"No second order and no second stock deduction.\n\n" +
+						"An optional `couponCode` takes its percentage off the whole subtotal (rounded half up, never below zero). " +
+						"A coupon is single-use and is only consumed if the checkout succeeds. Retrying with the same body " +
+						"replays; retrying a checked-out cart with a different coupon returns `409 CART_ALREADY_CHECKED_OUT`.\n\n" +
 						"Success: `201` with the new order. Errors: `404 CART_NOT_FOUND`, `422 CART_EMPTY`, " +
+						"`422 COUPON_NOT_FOUND`, `409 COUPON_ALREADY_REDEEMED`, " +
 						"`409 PRICE_CHANGED` (details list old/new price per line; retry with `acceptPriceChanges: true`), " +
 						"`409 INSUFFICIENT_STOCK` (details list every short line), `402 PAYMENT_DECLINED`. " +
 						"A failed checkout changes nothing: stock and the cart are untouched.",
