@@ -4,6 +4,8 @@ import type { Container } from "./container";
 import { ServiceUnavailableError } from "./domain/errors";
 import { errorHandler } from "./lib/error-handler";
 import { log } from "./lib/logger";
+import { cartRouter } from "./router/carts";
+import { productRouter } from "./router/products";
 import { ErrorResponse } from "./schemas/common";
 
 const API_DESCRIPTION = `
@@ -66,7 +68,9 @@ export function createApp(container: Container) {
 				},
 			},
 		)
-		.group("/api", (api) => api); // routers are mounted here as later phases land
+		.group("/api", (api) =>
+			api.use(productRouter(container.catalog)).use(cartRouter(container.carts)),
+		);
 }
 
 export type App = ReturnType<typeof createApp>;

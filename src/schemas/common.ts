@@ -12,3 +12,16 @@ export const ErrorResponse = t.Object(
 	},
 	{ title: "ErrorResponse" },
 );
+
+export const Uuid = t.String({
+	format: "uuid",
+	description: "UUID",
+	examples: ["11111111-1111-4111-8111-111111111111"],
+});
+
+/** Decimal string with exactly two fraction digits. Never a JSON number, to avoid float drift. */
+export const Money = t.String({
+	pattern: "^\\d+\\.\\d{2}$",
+	description: "Decimal amount with 2 fraction digits",
+	examples: ["19.99"],
+});

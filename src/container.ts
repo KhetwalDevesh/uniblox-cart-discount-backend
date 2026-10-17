@@ -2,6 +2,9 @@ import type { PrismaClient } from "@prisma/client";
 import { type Config, loadConfig } from "./config/env";
 import { db } from "./db";
 import { PrismaTransactionRunner, type TransactionRunner } from "./db/transaction";
+import { CartRepository, ProductRepository } from "./repositories";
+import { CartService } from "./services/cart.service";
+import { CatalogService } from "./services/catalog.service";
 
 /**
  * Composition root: the only place that wires concrete implementations together.
@@ -12,12 +15,20 @@ export type Container = {
 	config: Config;
 	db: PrismaClient;
 	transactions: TransactionRunner;
+	catalog: CatalogService;
+	carts: CartService;
 };
 
 export function createContainer(config: Config = loadConfig()): Container {
+	const transactions = new PrismaTransactionRunner(db);
+	const productRepository = new ProductRepository();
+	const cartRepository = new CartRepository();
+
 	return {
 		config,
 		db,
-		transactions: new PrismaTransactionRunner(db),
+		transactions,
+		catalog: new CatalogService(db, productRepository),
+		carts: new CartService(db, transactions, cartRepository, productRepository),
 	};
 }
